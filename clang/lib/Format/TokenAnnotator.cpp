@@ -4042,6 +4042,18 @@ bool TokenAnnotator::mustBreakBefore(const AnnotatedLine &Line,
       return true;
   }
 
+  // If AlwaysBreakBeforeFunctionParameters is true, we want to break before
+  // the next parameter, if there is one.
+  if (Left.is(tok::l_paren) && Style.AlwaysBreakBeforeFunctionParameters &&
+      !Right.is(tok::r_paren)) {
+    if (Left.Previous) {
+      const FormatToken &TwoPrevious = *Left.Previous;
+      if (TwoPrevious.is(TT_FunctionDeclarationName)) {
+        return true;
+      }
+    }
+  }
+
   // If the last token before a '}', ']', or ')' is a comma or a trailing
   // comment, the intention is to insert a line break after it in order to make
   // shuffling around entries easier. Import statements, especially in

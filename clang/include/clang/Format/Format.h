@@ -749,6 +749,14 @@ struct FormatStyle {
   /// \version 3.4
   bool AlwaysBreakBeforeMultilineStrings;
 
+  /// \brief Always break before function parameters in a declaration, e.g.:
+  /// \code
+  ///   someFunction(
+  ///       int argument1,
+  ///       int argument2);
+  /// \endcode
+  bool AlwaysBreakBeforeFunctionParameters;
+
   /// Different ways to break after the template declaration.
   enum BreakTemplateDeclarationsStyle : int8_t {
     /// Do not force break before declaration.

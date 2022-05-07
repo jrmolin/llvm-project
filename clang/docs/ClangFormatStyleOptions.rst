@@ -1241,6 +1241,21 @@ the configuration (without a prefix: ``Auto``).
 
 
 
+**AlwaysBreakBeforeFunctionParameters** (``Boolean``) :versionbadge:`clang-format 15.0`
+  If ``true``, always break before function parameters.
+
+  This flag is meant to align function parameters starting on the line following
+  a function declaration or definition. Thus, it will only take effect if a function
+  declares a parameter (or multiple parameters).
+
+  .. code-block:: c++
+
+     true:                                  false:
+     int                            vs.     int
+     add_two_numbers(                       add_two_numbers(int a,
+         int a,                                             int b);
+         int b);
+
 **AlwaysBreakBeforeMultilineStrings** (``Boolean``) :versionbadge:`clang-format 3.4`
   If ``true``, always break before multiline string literals.
 

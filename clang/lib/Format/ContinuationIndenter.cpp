@@ -335,6 +335,11 @@ bool ContinuationIndenter::mustBreak(const LineState &State) {
     auto LambdaBodyLength = getLengthToMatchingParen(Current, State.Stack);
     return LambdaBodyLength > getColumnLimit(State);
   }
+  // Check if we want to break before function parameters in declarations
+  if (startsNextParameter(Current, Style) &&
+      Style.AlwaysBreakBeforeFunctionParameters &&
+      State.Line->MustBeDeclaration)
+    return true;
   if (Current.MustBreakBefore || Current.is(TT_InlineASMColon))
     return true;
   if (CurrentState.BreakBeforeClosingBrace &&
@@ -983,7 +988,9 @@ unsigned ContinuationIndenter::addTokenOnNewLine(LineState &State,
     // If we are breaking after '(', '{', '<', or this is the break after a ':'
     // to start a member initializater list in a constructor, this should not
     // be considered bin packing unless the relevant AllowAll option is false or
-    // this is a dict/object literal.
+    // this is a dict/object literal. Break if
+    // AlwaysBreakBeforeFunctionParameters is true and it's a function
+    // declaration.
     bool PreviousIsBreakingCtorInitializerColon =
         Previous.is(TT_CtorInitializerColon) &&
         Style.BreakConstructorInitializers == FormatStyle::BCIS_AfterColon;
@@ -995,7 +1002,9 @@ unsigned ContinuationIndenter::addTokenOnNewLine(LineState &State,
          !State.Line->MustBeDeclaration) ||
         (Style.PackConstructorInitializers != FormatStyle::PCIS_NextLine &&
          PreviousIsBreakingCtorInitializerColon) ||
-        Previous.is(TT_DictLiteral))
+        Previous.is(TT_DictLiteral) ||
+        (Style.AlwaysBreakBeforeFunctionParameters &&
+         State.Line->MustBeDeclaration))
       CurrentState.BreakBeforeParameter = true;
 
     // If we are breaking after a ':' to start a member initializer list,
