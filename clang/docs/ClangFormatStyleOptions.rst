@@ -1246,14 +1246,15 @@ the configuration (without a prefix: ``Auto``).
 
   This flag is meant to align function parameters starting on the line following
   a function declaration or definition. Thus, it will only take effect if a function
-  declares a parameter (or multiple parameters).
+  declares a parameter (or multiple parameters). Example uses ``AlwaysBreakAfterReturnType``
+  set to ``All``.
 
   .. code-block:: c++
 
      true:                                  false:
      int                            vs.     int
      add_two_numbers(                       add_two_numbers(int a,
-         int a,                                             int b);
+         int a,                                 int b);
          int b);
 
 **AlwaysBreakBeforeMultilineStrings** (``Boolean``) :versionbadge:`clang-format 3.4`
