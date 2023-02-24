@@ -622,28 +622,6 @@ struct ScalarEnumerationTraits<FormatStyle::SortUsingDeclarationsOptions> {
   }
 };
 
-template <> struct MappingTraits<FormatStyle::BraceWrappingFlags> {
-  static void mapping(IO &IO, FormatStyle::BraceWrappingFlags &Wrapping) {
-    IO.mapOptional("AfterCaseLabel", Wrapping.AfterCaseLabel);
-    IO.mapOptional("AfterClass", Wrapping.AfterClass);
-    IO.mapOptional("AfterControlStatement", Wrapping.AfterControlStatement);
-    IO.mapOptional("AfterEnum", Wrapping.AfterEnum);
-    IO.mapOptional("AfterFunction", Wrapping.AfterFunction);
-    IO.mapOptional("AfterNamespace", Wrapping.AfterNamespace);
-    IO.mapOptional("AfterObjCDeclaration", Wrapping.AfterObjCDeclaration);
-    IO.mapOptional("AfterStruct", Wrapping.AfterStruct);
-    IO.mapOptional("AfterUnion", Wrapping.AfterUnion);
-    IO.mapOptional("AfterExternBlock", Wrapping.AfterExternBlock);
-    IO.mapOptional("BeforeCatch", Wrapping.BeforeCatch);
-    IO.mapOptional("BeforeElse", Wrapping.BeforeElse);
-    IO.mapOptional("BeforeLambdaBody", Wrapping.BeforeLambdaBody);
-    IO.mapOptional("BeforeWhile", Wrapping.BeforeWhile);
-    IO.mapOptional("IndentBraces", Wrapping.IndentBraces);
-    IO.mapOptional("SplitEmptyFunction", Wrapping.SplitEmptyFunction);
-    IO.mapOptional("SplitEmptyRecord", Wrapping.SplitEmptyRecord);
-    IO.mapOptional("SplitEmptyNamespace", Wrapping.SplitEmptyNamespace);
-  }
-};
 template <>
 struct ScalarEnumerationTraits<FormatStyle::SpaceAroundPointerQualifiersStyle> {
   static void
