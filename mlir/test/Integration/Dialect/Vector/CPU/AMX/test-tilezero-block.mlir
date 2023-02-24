@@ -1,6 +1,6 @@
-// RUN: mlir-opt %s -convert-vector-to-scf -lower-affine -convert-scf-to-cf -convert-vector-to-llvm="enable-amx" -convert-memref-to-llvm -convert-func-to-llvm -reconcile-unrealized-casts | \
+// RUN: mlir-opt %s -convert-vector-to-scf -lower-affine -convert-scf-to-cf -convert-vector-to-llvm="enable-amx" -finalize-memref-to-llvm -convert-func-to-llvm -reconcile-unrealized-casts | \
 // RUN: mlir-translate -mlir-to-llvmir | \
-// RUN: %lli --entry-function=entry --mattr="+amx-tile,+amx-int8,+amx-bf16" --dlopen=%mlir_integration_test_dir/libmlir_c_runner_utils%shlibext | \
+// RUN: %lli --entry-function=entry --mattr="+amx-tile,+amx-int8,+amx-bf16" --dlopen=%mlir_c_runner_utils | \
 // RUN: FileCheck %s
 
 // Note: To run this test, your CPU must support AMX.
@@ -27,7 +27,7 @@ func.func @kernel(%arg0: memref<4x32xf32>) {
     scf.for %j = %c0 to %c32 step %c16 {
       %0 = amx.tile_zero : vector<2x16xf32>
       amx.tile_store %arg0[%i, %j], %0 : memref<4x32xf32>, vector<2x16xf32>
-      call @print(%arg0) : (memref<4x32xf32>) -> ()
+      func.call @print(%arg0) : (memref<4x32xf32>) -> ()
     }
   }
   return
@@ -49,7 +49,7 @@ func.func @entry() -> i32 {
   }
 
   // Call kernel.
-  call @kernel(%a) : (memref<4x32xf32>) -> ()
+  func.call @kernel(%a) : (memref<4x32xf32>) -> ()
 
   // Verify progress of blocked tilezero.
   //

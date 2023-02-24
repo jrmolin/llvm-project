@@ -21,7 +21,7 @@
 
 _LIBCPP_BEGIN_NAMESPACE_STD
 
-#if _LIBCPP_STD_VER > 17
+#if _LIBCPP_STD_VER >= 20
 
 template <semiregular _Sent>
 class _LIBCPP_TEMPLATE_VIS move_sentinel
@@ -31,7 +31,7 @@ public:
   move_sentinel() = default;
 
   _LIBCPP_HIDE_FROM_ABI constexpr
-  explicit move_sentinel(_Sent __s) : __last_(_VSTD::move(__s)) {}
+  explicit move_sentinel(_Sent __s) : __last_(std::move(__s)) {}
 
   template <class _S2>
     requires convertible_to<const _S2&, _Sent>
@@ -50,7 +50,9 @@ private:
     _Sent __last_ = _Sent();
 };
 
-#endif // _LIBCPP_STD_VER > 17
+_LIBCPP_CTAD_SUPPORTED_FOR_TYPE(move_sentinel);
+
+#endif // _LIBCPP_STD_VER >= 20
 
 _LIBCPP_END_NAMESPACE_STD
 

@@ -13,6 +13,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "llvm/ADT/FunctionExtras.h"
 #include "llvm/Support/TypeName.h"
+#include <optional>
 
 namespace mlir {
 
@@ -88,29 +89,29 @@ public:
   ArrayRef<OperationName> getGeneratedOps() const { return generatedOps; }
 
   /// Return the root node that this pattern matches. Patterns that can match
-  /// multiple root types return None.
-  Optional<OperationName> getRootKind() const {
+  /// multiple root types return std::nullopt.
+  std::optional<OperationName> getRootKind() const {
     if (rootKind == RootKind::OperationName)
       return OperationName::getFromOpaquePointer(rootValue);
-    return llvm::None;
+    return std::nullopt;
   }
 
   /// Return the interface ID used to match the root operation of this pattern.
   /// If the pattern does not use an interface ID for deciding the root match,
-  /// this returns None.
-  Optional<TypeID> getRootInterfaceID() const {
+  /// this returns std::nullopt.
+  std::optional<TypeID> getRootInterfaceID() const {
     if (rootKind == RootKind::InterfaceID)
       return TypeID::getFromOpaquePointer(rootValue);
-    return llvm::None;
+    return std::nullopt;
   }
 
   /// Return the trait ID used to match the root operation of this pattern.
   /// If the pattern does not use a trait ID for deciding the root match, this
-  /// returns None.
-  Optional<TypeID> getRootTraitID() const {
+  /// returns std::nullopt.
+  std::optional<TypeID> getRootTraitID() const {
     if (rootKind == RootKind::TraitID)
       return TypeID::getFromOpaquePointer(rootValue);
-    return llvm::None;
+    return std::nullopt;
   }
 
   /// Return the benefit (the inverse of "cost") of matching this pattern.  The
@@ -271,7 +272,7 @@ public:
   /// This method provides a convenient interface for creating and initializing
   /// derived rewrite patterns of the given type `T`.
   template <typename T, typename... Args>
-  static std::unique_ptr<T> create(Args &&... args) {
+  static std::unique_ptr<T> create(Args &&...args) {
     std::unique_ptr<T> pattern =
         std::make_unique<T>(std::forward<Args>(args)...);
     initializePattern<T>(*pattern);
@@ -395,8 +396,39 @@ public:
 /// This class serves as a common API for IR mutation between pattern rewrites
 /// and non-pattern rewrites, and facilitates the development of shared
 /// IR transformation utilities.
-class RewriterBase : public OpBuilder, public OpBuilder::Listener {
+class RewriterBase : public OpBuilder {
 public:
+  struct Listener : public OpBuilder::Listener {
+    Listener()
+        : OpBuilder::Listener(ListenerBase::Kind::RewriterBaseListener) {}
+
+    /// Notify the listener that the specified operation was modified in-place.
+    virtual void notifyOperationModified(Operation *op) {}
+
+    /// Notify the listener that the specified operation is about to be replaced
+    /// with the set of values potentially produced by new operations. This is
+    /// called before the uses of the operation have been changed.
+    virtual void notifyOperationReplaced(Operation *op,
+                                         ValueRange replacement) {}
+
+    /// This is called on an operation that a rewrite is removing, right before
+    /// the operation is deleted. At this point, the operation has zero uses.
+    virtual void notifyOperationRemoved(Operation *op) {}
+
+    /// Notify the listener that the pattern failed to match the given
+    /// operation, and provide a callback to populate a diagnostic with the
+    /// reason why the failure occurred. This method allows for derived
+    /// listeners to optionally hook into the reason why a rewrite failed, and
+    /// display it to users.
+    virtual LogicalResult
+    notifyMatchFailure(Location loc,
+                       function_ref<void(Diagnostic &)> reasonCallback) {
+      return failure();
+    }
+
+    static bool classof(const OpBuilder::Listener *base);
+  };
+
   /// Move the blocks that belong to "region" before the given position in
   /// another region "parent". The two regions must be different. The caller
   /// is responsible for creating or updating the operation transferring flow
@@ -410,8 +442,7 @@ public:
   /// responsible for creating or updating the operation transferring flow of
   /// control to the region and passing it the correct block arguments.
   virtual void cloneRegionBefore(Region &region, Region &parent,
-                                 Region::iterator before,
-                                 BlockAndValueMapping &mapping);
+                                 Region::iterator before, IRMapping &mapping);
   void cloneRegionBefore(Region &region, Region &parent,
                          Region::iterator before);
   void cloneRegionBefore(Region &region, Block *before);
@@ -465,12 +496,12 @@ public:
   /// 'argValues' is used to replace the block arguments of 'source' after
   /// merging.
   virtual void mergeBlocks(Block *source, Block *dest,
-                           ValueRange argValues = llvm::None);
+                           ValueRange argValues = std::nullopt);
 
   // Merge the operations of block 'source' before the operation 'op'. Source
   // block should not have existing predecessors or successors.
   void mergeBlockBefore(Block *source, Operation *op,
-                        ValueRange argValues = llvm::None);
+                        ValueRange argValues = std::nullopt);
 
   /// Split the operations starting at "before" (inclusive) out of the given
   /// block into a new block, and return it.
@@ -486,7 +517,7 @@ public:
   /// This method is used to signal the end of a root update on the given
   /// operation. This can only be called on operations that were provided to a
   /// call to `startRootUpdate`.
-  virtual void finalizeRootUpdate(Operation *op) {}
+  virtual void finalizeRootUpdate(Operation *op);
 
   /// This method cancels a pending root update. This can only be called on
   /// operations that were provided to a call to `startRootUpdate`.
@@ -502,6 +533,37 @@ public:
     finalizeRootUpdate(root);
   }
 
+  /// Find uses of `from` and replace them with `to`. It also marks every
+  /// modified uses and notifies the rewriter that an in-place operation
+  /// modification is about to happen.
+  void replaceAllUsesWith(Value from, Value to) {
+    return replaceAllUsesWith(from.getImpl(), to);
+  }
+  template <typename OperandType, typename ValueT>
+  void replaceAllUsesWith(IRObjectWithUseList<OperandType> *from, ValueT &&to) {
+    for (OperandType &operand : llvm::make_early_inc_range(from->getUses())) {
+      Operation *op = operand.getOwner();
+      updateRootInPlace(op, [&]() { operand.set(to); });
+    }
+  }
+
+  /// Find uses of `from` and replace them with `to` if the `functor` returns
+  /// true. It also marks every modified uses and notifies the rewriter that an
+  /// in-place operation modification is about to happen.
+  void
+  replaceUsesWithIf(Value from, Value to,
+                    llvm::unique_function<bool(OpOperand &) const> functor);
+
+  /// Find uses of `from` and replace them with `to` except if the user is
+  /// `exceptedUser`. It also marks every modified uses and notifies the
+  /// rewriter that an in-place operation modification is about to happen.
+  void replaceAllUsesExcept(Value from, Value to, Operation *exceptedUser) {
+    return replaceUsesWithIf(from, to, [&](OpOperand &use) {
+      Operation *user = use.getOwner();
+      return user != exceptedUser;
+    });
+  }
+
   /// Used to notify the rewriter that the IR failed to be rewritten because of
   /// a match failure, and provide a callback to populate a diagnostic with the
   /// reason why the failure occurred. This method allows for derived rewriters
@@ -511,8 +573,10 @@ public:
   std::enable_if_t<!std::is_convertible<CallbackT, Twine>::value, LogicalResult>
   notifyMatchFailure(Location loc, CallbackT &&reasonCallback) {
 #ifndef NDEBUG
-    return notifyMatchFailure(loc,
-                              function_ref<void(Diagnostic &)>(reasonCallback));
+    if (auto *rewriteListener = dyn_cast_if_present<Listener>(listener))
+      return rewriteListener->notifyMatchFailure(
+          loc, function_ref<void(Diagnostic &)>(reasonCallback));
+    return failure();
 #else
     return failure();
 #endif
@@ -520,8 +584,10 @@ public:
   template <typename CallbackT>
   std::enable_if_t<!std::is_convertible<CallbackT, Twine>::value, LogicalResult>
   notifyMatchFailure(Operation *op, CallbackT &&reasonCallback) {
-    return notifyMatchFailure(op->getLoc(),
-                              function_ref<void(Diagnostic &)>(reasonCallback));
+    if (auto *rewriteListener = dyn_cast_if_present<Listener>(listener))
+      return rewriteListener->notifyMatchFailure(
+          op->getLoc(), function_ref<void(Diagnostic &)>(reasonCallback));
+    return failure();
   }
   template <typename ArgT>
   LogicalResult notifyMatchFailure(ArgT &&arg, const Twine &msg) {
@@ -534,35 +600,11 @@ public:
   }
 
 protected:
-  /// Initialize the builder with this rewriter as the listener.
-  explicit RewriterBase(MLIRContext *ctx) : OpBuilder(ctx, /*listener=*/this) {}
+  /// Initialize the builder.
+  explicit RewriterBase(MLIRContext *ctx) : OpBuilder(ctx) {}
   explicit RewriterBase(const OpBuilder &otherBuilder)
-      : OpBuilder(otherBuilder) {
-    setListener(this);
-  }
-  ~RewriterBase() override;
-
-  /// These are the callback methods that subclasses can choose to implement if
-  /// they would like to be notified about certain types of mutations.
-
-  /// Notify the rewriter that the specified operation is about to be replaced
-  /// with another set of operations. This is called before the uses of the
-  /// operation have been changed.
-  virtual void notifyRootReplaced(Operation *op) {}
-
-  /// This is called on an operation that a rewrite is removing, right before
-  /// the operation is deleted. At this point, the operation has zero uses.
-  virtual void notifyOperationRemoved(Operation *op) {}
-
-  /// Notify the rewriter that the pattern failed to match the given operation,
-  /// and provide a callback to populate a diagnostic with the reason why the
-  /// failure occurred. This method allows for derived rewriters to optionally
-  /// hook into the reason why a rewrite failed, and display it to users.
-  virtual LogicalResult
-  notifyMatchFailure(Location loc,
-                     function_ref<void(Diagnostic &)> reasonCallback) {
-    return failure();
-  }
+      : OpBuilder(otherBuilder) {}
+  virtual ~RewriterBase();
 
 private:
   void operator=(const RewriterBase &) = delete;
@@ -600,10 +642,16 @@ public:
 class PatternRewriter : public RewriterBase {
 public:
   using RewriterBase::RewriterBase;
+
+  /// A hook used to indicate if the pattern rewriter can recover from failure
+  /// during the rewrite stage of a pattern. For example, if the pattern
+  /// rewriter supports rollback, it may progress smoothly even if IR was
+  /// changed during the rewrite.
+  virtual bool canRecoverFromRewriteFailure() const { return false; }
 };
 
 //===----------------------------------------------------------------------===//
-// PDLPatternModule
+// PDL Patterns
 //===----------------------------------------------------------------------===//
 
 //===----------------------------------------------------------------------===//
@@ -639,7 +687,7 @@ public:
   /// value is not an instance of `T`.
   template <typename T,
             typename ResultT = std::conditional_t<
-                std::is_convertible<T, bool>::value, T, Optional<T>>>
+                std::is_convertible<T, bool>::value, T, std::optional<T>>>
   ResultT dyn_cast() const {
     return isa<T>() ? castImpl<T>() : ResultT();
   }
@@ -797,6 +845,108 @@ protected:
 };
 
 //===----------------------------------------------------------------------===//
+// PDLPatternConfig
+
+/// An individual configuration for a pattern, which can be accessed by native
+/// functions via the PDLPatternConfigSet. This allows for injecting additional
+/// configuration into PDL patterns that is specific to certain compilation
+/// flows.
+class PDLPatternConfig {
+public:
+  virtual ~PDLPatternConfig() = default;
+
+  /// Hooks that are invoked at the beginning and end of a rewrite of a matched
+  /// pattern. These can be used to setup any specific state necessary for the
+  /// rewrite.
+  virtual void notifyRewriteBegin(PatternRewriter &rewriter) {}
+  virtual void notifyRewriteEnd(PatternRewriter &rewriter) {}
+
+  /// Return the TypeID that represents this configuration.
+  TypeID getTypeID() const { return id; }
+
+protected:
+  PDLPatternConfig(TypeID id) : id(id) {}
+
+private:
+  TypeID id;
+};
+
+/// This class provides a base class for users implementing a type of pattern
+/// configuration.
+template <typename T>
+class PDLPatternConfigBase : public PDLPatternConfig {
+public:
+  /// Support LLVM style casting.
+  static bool classof(const PDLPatternConfig *config) {
+    return config->getTypeID() == getConfigID();
+  }
+
+  /// Return the type id used for this configuration.
+  static TypeID getConfigID() { return TypeID::get<T>(); }
+
+protected:
+  PDLPatternConfigBase() : PDLPatternConfig(getConfigID()) {}
+};
+
+/// This class contains a set of configurations for a specific pattern.
+/// Configurations are uniqued by TypeID, meaning that only one configuration of
+/// each type is allowed.
+class PDLPatternConfigSet {
+public:
+  PDLPatternConfigSet() = default;
+
+  /// Construct a set with the given configurations.
+  template <typename... ConfigsT>
+  PDLPatternConfigSet(ConfigsT &&...configs) {
+    (addConfig(std::forward<ConfigsT>(configs)), ...);
+  }
+
+  /// Get the configuration defined by the given type. Asserts that the
+  /// configuration of the provided type exists.
+  template <typename T>
+  const T &get() const {
+    const T *config = tryGet<T>();
+    assert(config && "configuration not found");
+    return *config;
+  }
+
+  /// Get the configuration defined by the given type, returns nullptr if the
+  /// configuration does not exist.
+  template <typename T>
+  const T *tryGet() const {
+    for (const auto &configIt : configs)
+      if (const T *config = dyn_cast<T>(configIt.get()))
+        return config;
+    return nullptr;
+  }
+
+  /// Notify the configurations within this set at the beginning or end of a
+  /// rewrite of a matched pattern.
+  void notifyRewriteBegin(PatternRewriter &rewriter) {
+    for (const auto &config : configs)
+      config->notifyRewriteBegin(rewriter);
+  }
+  void notifyRewriteEnd(PatternRewriter &rewriter) {
+    for (const auto &config : configs)
+      config->notifyRewriteEnd(rewriter);
+  }
+
+protected:
+  /// Add a configuration to the set.
+  template <typename T>
+  void addConfig(T &&config) {
+    assert(!tryGet<std::decay_t<T>>() && "configuration already exists");
+    configs.emplace_back(
+        std::make_unique<std::decay_t<T>>(std::forward<T>(config)));
+  }
+
+  /// The set of configurations for this pattern. This uses a vector instead of
+  /// a map with the expectation that the number of configurations per set is
+  /// small (<= 1).
+  SmallVector<std::unique_ptr<PDLPatternConfig>> configs;
+};
+
+//===----------------------------------------------------------------------===//
 // PDLPatternModule
 
 /// A generic PDL pattern constraint function. This function applies a
@@ -807,9 +957,11 @@ using PDLConstraintFunction =
 /// A native PDL rewrite function. This function performs a rewrite on the
 /// given set of values. Any results from this rewrite that should be passed
 /// back to PDL should be added to the provided result list. This method is only
-/// invoked when the corresponding match was successful.
-using PDLRewriteFunction =
-    std::function<void(PatternRewriter &, PDLResultList &, ArrayRef<PDLValue>)>;
+/// invoked when the corresponding match was successful. Returns failure if an
+/// invariant of the rewrite was broken (certain rewriters may recover from
+/// partial pattern application).
+using PDLRewriteFunction = std::function<LogicalResult(
+    PatternRewriter &, PDLResultList &, ArrayRef<PDLValue>)>;
 
 namespace detail {
 namespace pdl_function_builder {
@@ -943,9 +1095,13 @@ struct ProcessDerivedPDLValue : public ProcessPDLValueBasedOn<T, BaseT> {
                          " to be of type: " + llvm::getTypeName<T>());
         });
   }
+  using ProcessPDLValueBasedOn<T, BaseT>::verifyAsArg;
+
   static T processAsArg(BaseT baseValue) {
     return baseValue.template cast<T>();
   }
+  using ProcessPDLValueBasedOn<T, BaseT>::processAsArg;
+
   static void processAsResult(PatternRewriter &, PDLResultList &results,
                               T value) {
     results.push_back(value);
@@ -967,6 +1123,8 @@ template <>
 struct ProcessPDLValue<StringRef>
     : public ProcessPDLValueBasedOn<StringRef, StringAttr> {
   static StringRef processAsArg(StringAttr value) { return value.getValue(); }
+  using ProcessPDLValueBasedOn<StringRef, StringAttr>::processAsArg;
+
   static void processAsResult(PatternRewriter &rewriter, PDLResultList &results,
                               StringRef value) {
     results.push_back(rewriter.getStringAttr(value));
@@ -1028,6 +1186,13 @@ struct ProcessPDLValue<ValueTypeRange<ResultRange>> {
     results.push_back(types);
   }
 };
+template <unsigned N>
+struct ProcessPDLValue<SmallVector<Type, N>> {
+  static void processAsResult(PatternRewriter &, PDLResultList &results,
+                              SmallVector<Type, N> values) {
+    results.push_back(TypeRange(values));
+  }
+};
 
 //===----------------------------------------------------------------------===//
 // Value
@@ -1055,6 +1220,13 @@ struct ProcessPDLValue<ResultRange> {
     results.push_back(values);
   }
 };
+template <unsigned N>
+struct ProcessPDLValue<SmallVector<Value, N>> {
+  static void processAsResult(PatternRewriter &, PDLResultList &results,
+                              SmallVector<Value, N> values) {
+    results.push_back(ValueRange(values));
+  }
+};
 
 //===----------------------------------------------------------------------===//
 // PDL Function Builder: Argument Handling
@@ -1073,15 +1245,10 @@ LogicalResult verifyAsArgs(PatternRewriter &rewriter, ArrayRef<PDLValue> values,
   auto errorFn = [&](const Twine &msg) {
     return rewriter.notifyMatchFailure(rewriter.getUnknownLoc(), msg);
   };
-  LogicalResult result = success();
-  (void)std::initializer_list<int>{
-      (result =
-           succeeded(result)
-               ? ProcessPDLValue<typename FnTraitsT::template arg_t<I + 1>>::
-                     verifyAsArg(errorFn, values[I], I)
-               : failure(),
-       0)...};
-  return result;
+  return success(
+      (succeeded(ProcessPDLValue<typename FnTraitsT::template arg_t<I + 1>>::
+                     verifyAsArg(errorFn, values[I], I)) &&
+       ...));
 }
 
 /// Assert that the given PDLValues match the constraints defined by the
@@ -1096,11 +1263,12 @@ void assertArgs(PatternRewriter &rewriter, ArrayRef<PDLValue> values,
   auto errorFn = [&](const Twine &msg) -> LogicalResult {
     llvm::report_fatal_error(msg);
   };
-  (void)std::initializer_list<int>{
-      (assert(succeeded(ProcessPDLValue<typename FnTraitsT::template arg_t<
-                            I + 1>>::verifyAsArg(errorFn, values[I], I))),
-       0)...};
+  (void)errorFn;
+  assert((succeeded(ProcessPDLValue<typename FnTraitsT::template arg_t<I + 1>>::
+                        verifyAsArg(errorFn, values[I], I)) &&
+          ...));
 #endif
+  (void)values;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1109,31 +1277,49 @@ void assertArgs(PatternRewriter &rewriter, ArrayRef<PDLValue> values,
 
 /// Store a single result within the result list.
 template <typename T>
-static void processResults(PatternRewriter &rewriter, PDLResultList &results,
-                           T &&value) {
+static LogicalResult processResults(PatternRewriter &rewriter,
+                                    PDLResultList &results, T &&value) {
   ProcessPDLValue<T>::processAsResult(rewriter, results,
                                       std::forward<T>(value));
+  return success();
 }
 
 /// Store a std::pair<> as individual results within the result list.
 template <typename T1, typename T2>
-static void processResults(PatternRewriter &rewriter, PDLResultList &results,
-                           std::pair<T1, T2> &&pair) {
-  processResults(rewriter, results, std::move(pair.first));
-  processResults(rewriter, results, std::move(pair.second));
+static LogicalResult processResults(PatternRewriter &rewriter,
+                                    PDLResultList &results,
+                                    std::pair<T1, T2> &&pair) {
+  if (failed(processResults(rewriter, results, std::move(pair.first))) ||
+      failed(processResults(rewriter, results, std::move(pair.second))))
+    return failure();
+  return success();
 }
 
 /// Store a std::tuple<> as individual results within the result list.
 template <typename... Ts>
-static void processResults(PatternRewriter &rewriter, PDLResultList &results,
-                           std::tuple<Ts...> &&tuple) {
+static LogicalResult processResults(PatternRewriter &rewriter,
+                                    PDLResultList &results,
+                                    std::tuple<Ts...> &&tuple) {
   auto applyFn = [&](auto &&...args) {
-    // TODO: Use proper fold expressions when we have C++17. For now we use a
-    // bogus std::initializer_list to work around C++14 limitations.
-    (void)std::initializer_list<int>{
-        (processResults(rewriter, results, std::move(args)), 0)...};
+    return (succeeded(processResults(rewriter, results, std::move(args))) &&
+            ...);
   };
-  llvm::apply_tuple(applyFn, std::move(tuple));
+  return success(std::apply(applyFn, std::move(tuple)));
+}
+
+/// Handle LogicalResult propagation.
+inline LogicalResult processResults(PatternRewriter &rewriter,
+                                    PDLResultList &results,
+                                    LogicalResult &&result) {
+  return result;
+}
+template <typename T>
+static LogicalResult processResults(PatternRewriter &rewriter,
+                                    PDLResultList &results,
+                                    FailureOr<T> &&result) {
+  if (failed(result))
+    return failure();
+  return processResults(rewriter, results, std::move(*result));
 }
 
 //===----------------------------------------------------------------------===//
@@ -1193,26 +1379,30 @@ buildConstraintFn(ConstraintFnT &&constraintFn) {
 /// This overload handles the case of no return values.
 template <typename PDLFnT, std::size_t... I,
           typename FnTraitsT = llvm::function_traits<PDLFnT>>
-std::enable_if_t<std::is_same<typename FnTraitsT::result_t, void>::value>
+std::enable_if_t<std::is_same<typename FnTraitsT::result_t, void>::value,
+                 LogicalResult>
 processArgsAndInvokeRewrite(PDLFnT &fn, PatternRewriter &rewriter,
                             PDLResultList &, ArrayRef<PDLValue> values,
                             std::index_sequence<I...>) {
   fn(rewriter,
      (ProcessPDLValue<typename FnTraitsT::template arg_t<I + 1>>::processAsArg(
          values[I]))...);
+  return success();
 }
 /// This overload handles the case of return values, which need to be packaged
 /// into the result list.
 template <typename PDLFnT, std::size_t... I,
           typename FnTraitsT = llvm::function_traits<PDLFnT>>
-std::enable_if_t<!std::is_same<typename FnTraitsT::result_t, void>::value>
+std::enable_if_t<!std::is_same<typename FnTraitsT::result_t, void>::value,
+                 LogicalResult>
 processArgsAndInvokeRewrite(PDLFnT &fn, PatternRewriter &rewriter,
                             PDLResultList &results, ArrayRef<PDLValue> values,
                             std::index_sequence<I...>) {
-  processResults(
+  return processResults(
       rewriter, results,
       fn(rewriter, (ProcessPDLValue<typename FnTraitsT::template arg_t<I + 1>>::
                         processAsArg(values[I]))...));
+  (void)values;
 }
 
 /// Build a rewrite function from the given function `RewriteFnT`. This
@@ -1240,13 +1430,16 @@ buildRewriteFn(RewriteFnT &&rewriteFn) {
         std::make_index_sequence<llvm::function_traits<RewriteFnT>::num_args -
                                  1>();
     assertArgs<RewriteFnT>(rewriter, values, argIndices);
-    processArgsAndInvokeRewrite(rewriteFn, rewriter, results, values,
-                                argIndices);
+    return processArgsAndInvokeRewrite(rewriteFn, rewriter, results, values,
+                                       argIndices);
   };
 }
 
 } // namespace pdl_function_builder
 } // namespace detail
+
+//===----------------------------------------------------------------------===//
+// PDLPatternModule
 
 /// This class contains all of the necessary data for a set of PDL patterns, or
 /// pattern rewrites specified in the form of the PDL dialect. This PDL module
@@ -1256,9 +1449,17 @@ class PDLPatternModule {
 public:
   PDLPatternModule() = default;
 
-  /// Construct a PDL pattern with the given module.
-  PDLPatternModule(OwningOpRef<ModuleOp> pdlModule)
-      : pdlModule(std::move(pdlModule)) {}
+  /// Construct a PDL pattern with the given module and configurations.
+  PDLPatternModule(OwningOpRef<ModuleOp> module)
+      : pdlModule(std::move(module)) {}
+  template <typename... ConfigsT>
+  PDLPatternModule(OwningOpRef<ModuleOp> module, ConfigsT &&...patternConfigs)
+      : PDLPatternModule(std::move(module)) {
+    auto configSet = std::make_unique<PDLPatternConfigSet>(
+        std::forward<ConfigsT>(patternConfigs)...);
+    attachConfigToPatterns(*pdlModule, *configSet);
+    configs.emplace_back(std::move(configSet));
+  }
 
   /// Merge the state in `other` into this pattern module.
   void mergeIn(PDLPatternModule &&other);
@@ -1344,6 +1545,14 @@ public:
     return rewriteFunctions;
   }
 
+  /// Return the set of the registered pattern configs.
+  SmallVector<std::unique_ptr<PDLPatternConfigSet>> takeConfigs() {
+    return std::move(configs);
+  }
+  DenseMap<Operation *, PDLPatternConfigSet *> takeConfigMap() {
+    return std::move(configMap);
+  }
+
   /// Clear out the patterns and functions within this module.
   void clear() {
     pdlModule = nullptr;
@@ -1352,8 +1561,16 @@ public:
   }
 
 private:
+  /// Attach the given pattern config set to the patterns defined within the
+  /// given module.
+  void attachConfigToPatterns(ModuleOp module, PDLPatternConfigSet &configSet);
+
   /// The module containing the `pdl.pattern` operations.
   OwningOpRef<ModuleOp> pdlModule;
+
+  /// The set of configuration sets referenced by patterns within `pdlModule`.
+  SmallVector<std::unique_ptr<PDLPatternConfigSet>> configs;
+  DenseMap<Operation *, PDLPatternConfigSet *> configMap;
 
   /// The external functions referenced from within the PDL module.
   llvm::StringMap<PDLConstraintFunction> constraintFunctions;
@@ -1404,13 +1621,13 @@ public:
   template <typename... Ts, typename ConstructorArg,
             typename... ConstructorArgs,
             typename = std::enable_if_t<sizeof...(Ts) != 0>>
-  RewritePatternSet &add(ConstructorArg &&arg, ConstructorArgs &&... args) {
+  RewritePatternSet &add(ConstructorArg &&arg, ConstructorArgs &&...args) {
     // The following expands a call to emplace_back for each of the pattern
-    // types 'Ts'. This magic is necessary due to a limitation in the places
-    // that a parameter pack can be expanded in c++11.
-    // FIXME: In c++17 this can be simplified by using 'fold expressions'.
-    (void)std::initializer_list<int>{
-        0, (addImpl<Ts>(/*debugLabels=*/llvm::None, arg, args...), 0)...};
+    // types 'Ts'.
+    (addImpl<Ts>(/*debugLabels=*/std::nullopt,
+                 std::forward<ConstructorArg>(arg),
+                 std::forward<ConstructorArgs>(args)...),
+     ...);
     return *this;
   }
   /// An overload of the above `add` method that allows for attaching a set
@@ -1422,13 +1639,10 @@ public:
             typename = std::enable_if_t<sizeof...(Ts) != 0>>
   RewritePatternSet &addWithLabel(ArrayRef<StringRef> debugLabels,
                                   ConstructorArg &&arg,
-                                  ConstructorArgs &&... args) {
+                                  ConstructorArgs &&...args) {
     // The following expands a call to emplace_back for each of the pattern
-    // types 'Ts'. This magic is necessary due to a limitation in the places
-    // that a parameter pack can be expanded in c++11.
-    // FIXME: In c++17 this can be simplified by using 'fold expressions'.
-    (void)std::initializer_list<int>{
-        0, (addImpl<Ts>(debugLabels, arg, args...), 0)...};
+    // types 'Ts'.
+    (addImpl<Ts>(debugLabels, arg, args...), ...);
     return *this;
   }
 
@@ -1436,7 +1650,7 @@ public:
   /// `this` for chaining insertions.
   template <typename... Ts>
   RewritePatternSet &add() {
-    (void)std::initializer_list<int>{0, (addImpl<Ts>(), 0)...};
+    (addImpl<Ts>(), ...);
     return *this;
   }
 
@@ -1456,12 +1670,15 @@ public:
 
   // Add a matchAndRewrite style pattern represented as a C function pointer.
   template <typename OpType>
-  RewritePatternSet &add(LogicalResult (*implFn)(OpType,
-                                                 PatternRewriter &rewriter)) {
+  RewritePatternSet &
+  add(LogicalResult (*implFn)(OpType, PatternRewriter &rewriter),
+      PatternBenefit benefit = 1, ArrayRef<StringRef> generatedNames = {}) {
     struct FnPattern final : public OpRewritePattern<OpType> {
       FnPattern(LogicalResult (*implFn)(OpType, PatternRewriter &rewriter),
-                MLIRContext *context)
-          : OpRewritePattern<OpType>(context), implFn(implFn) {}
+                MLIRContext *context, PatternBenefit benefit,
+                ArrayRef<StringRef> generatedNames)
+          : OpRewritePattern<OpType>(context, benefit, generatedNames),
+            implFn(implFn) {}
 
       LogicalResult matchAndRewrite(OpType op,
                                     PatternRewriter &rewriter) const override {
@@ -1471,7 +1688,8 @@ public:
     private:
       LogicalResult (*implFn)(OpType, PatternRewriter &rewriter);
     };
-    add(std::make_unique<FnPattern>(std::move(implFn), getContext()));
+    add(std::make_unique<FnPattern>(std::move(implFn), getContext(), benefit,
+                                    generatedNames));
     return *this;
   }
 
@@ -1487,13 +1705,10 @@ public:
   template <typename... Ts, typename ConstructorArg,
             typename... ConstructorArgs,
             typename = std::enable_if_t<sizeof...(Ts) != 0>>
-  RewritePatternSet &insert(ConstructorArg &&arg, ConstructorArgs &&... args) {
+  RewritePatternSet &insert(ConstructorArg &&arg, ConstructorArgs &&...args) {
     // The following expands a call to emplace_back for each of the pattern
-    // types 'Ts'. This magic is necessary due to a limitation in the places
-    // that a parameter pack can be expanded in c++11.
-    // FIXME: In c++17 this can be simplified by using 'fold expressions'.
-    (void)std::initializer_list<int>{
-        0, (addImpl<Ts>(/*debugLabels=*/llvm::None, arg, args...), 0)...};
+    // types 'Ts'.
+    (addImpl<Ts>(/*debugLabels=*/std::nullopt, arg, args...), ...);
     return *this;
   }
 
@@ -1501,7 +1716,7 @@ public:
   /// `this` for chaining insertions.
   template <typename... Ts>
   RewritePatternSet &insert() {
-    (void)std::initializer_list<int>{0, (addImpl<Ts>(), 0)...};
+    (addImpl<Ts>(), ...);
     return *this;
   }
 
@@ -1547,7 +1762,7 @@ private:
   /// chaining insertions.
   template <typename T, typename... Args>
   std::enable_if_t<std::is_base_of<RewritePattern, T>::value>
-  addImpl(ArrayRef<StringRef> debugLabels, Args &&... args) {
+  addImpl(ArrayRef<StringRef> debugLabels, Args &&...args) {
     std::unique_ptr<T> pattern =
         RewritePattern::create<T>(std::forward<Args>(args)...);
     pattern->addDebugLabels(debugLabels);
@@ -1555,7 +1770,7 @@ private:
   }
   template <typename T, typename... Args>
   std::enable_if_t<std::is_base_of<PDLPatternModule, T>::value>
-  addImpl(ArrayRef<StringRef> debugLabels, Args &&... args) {
+  addImpl(ArrayRef<StringRef> debugLabels, Args &&...args) {
     // TODO: Add the provided labels to the PDL pattern when PDL supports
     // labels.
     pdlPatterns.mergeIn(T(std::forward<Args>(args)...));

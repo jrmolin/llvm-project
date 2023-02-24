@@ -12,6 +12,7 @@
 #include "mlir/Tools/PDLL/ODS/Operation.h"
 #include "llvm/Support/ScopedPrinter.h"
 #include "llvm/Support/raw_ostream.h"
+#include <optional>
 
 using namespace mlir;
 using namespace mlir::pdll::ods;
@@ -59,13 +60,14 @@ const Dialect *Context::lookupDialect(StringRef name) const {
   return it == dialects.end() ? nullptr : &*it->second;
 }
 
-std::pair<Operation *, bool> Context::insertOperation(StringRef name,
-                                                      StringRef summary,
-                                                      StringRef desc,
-                                                      SMLoc loc) {
+std::pair<Operation *, bool>
+Context::insertOperation(StringRef name, StringRef summary, StringRef desc,
+                         StringRef nativeClassName,
+                         bool supportsResultTypeInferrence, SMLoc loc) {
   std::pair<StringRef, StringRef> dialectAndName = name.split('.');
   return insertDialect(dialectAndName.first)
-      .insertOperation(name, summary, desc, loc);
+      .insertOperation(name, summary, desc, nativeClassName,
+                       supportsResultTypeInferrence, loc);
 }
 
 const Operation *Context::lookupOperation(StringRef name) const {

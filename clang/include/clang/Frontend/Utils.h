@@ -107,10 +107,10 @@ public:
 
   void finishedMainFile(DiagnosticsEngine &Diags) override;
 
-  bool needSystemDependencies() final override { return IncludeSystemHeaders; }
+  bool needSystemDependencies() final { return IncludeSystemHeaders; }
 
   bool sawDependency(StringRef Filename, bool FromModule, bool IsSystem,
-                     bool IsModuleFile, bool IsMissing) final override;
+                     bool IsModuleFile, bool IsMissing) final;
 
 protected:
   void outputDependencyFile(llvm::raw_ostream &OS);
@@ -206,7 +206,7 @@ struct CreateInvocationOptions {
   /// This is used to replace -include with -include-pch in the cc1 args.
   /// FIXME: ProbePrecompiled=true is a poor, historical default.
   /// It misbehaves if the PCH file is from GCC, has the wrong version, etc.
-  bool ProbePrecompiled = true;
+  bool ProbePrecompiled = false;
   /// If set, the target is populated with the cc1 args produced by the driver.
   /// This may be populated even if createInvocation returns nullptr.
   std::vector<std::string> *CC1Args = nullptr;

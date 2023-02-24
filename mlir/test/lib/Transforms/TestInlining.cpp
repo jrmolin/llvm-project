@@ -7,15 +7,15 @@
 //===----------------------------------------------------------------------===//
 //
 // TODO: This pass is only necessary because the main inlining pass
-// has no abstracted away the call+callee relationship. When the inlining
+// has not abstracted away the call+callee relationship. When the inlining
 // interface has this support, this pass should be removed.
 //
 //===----------------------------------------------------------------------===//
 
 #include "TestDialect.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/IR/BlockAndValueMapping.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/InliningUtils.h"
 #include "llvm/ADT/StringSet.h"

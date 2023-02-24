@@ -92,26 +92,8 @@ value llvm_add_licm(LLVMPassManagerRef PM) {
 }
 
 /* [<Llvm.PassManager.any] Llvm.PassManager.t -> unit */
-value llvm_add_loop_deletion(LLVMPassManagerRef PM) {
-  LLVMAddLoopDeletionPass(PM);
-  return Val_unit;
-}
-
-/* [<Llvm.PassManager.any] Llvm.PassManager.t -> unit */
-value llvm_add_loop_idiom(LLVMPassManagerRef PM) {
-  LLVMAddLoopIdiomPass(PM);
-  return Val_unit;
-}
-
-/* [<Llvm.PassManager.any] Llvm.PassManager.t -> unit */
 value llvm_add_loop_rotate(LLVMPassManagerRef PM) {
   LLVMAddLoopRotatePass(PM);
-  return Val_unit;
-}
-
-/* [<Llvm.PassManager.any] Llvm.PassManager.t -> unit */
-value llvm_add_loop_reroll(LLVMPassManagerRef PM) {
-  LLVMAddLoopRerollPass(PM);
   return Val_unit;
 }
 
@@ -154,12 +136,6 @@ value llvm_add_promote_memory_to_register(LLVMPassManagerRef PM) {
 /* [<Llvm.PassManager.any] Llvm.PassManager.t -> unit */
 value llvm_add_reassociation(LLVMPassManagerRef PM) {
   LLVMAddReassociatePass(PM);
-  return Val_unit;
-}
-
-/* [<Llvm.PassManager.any] Llvm.PassManager.t -> unit */
-value llvm_add_sccp(LLVMPassManagerRef PM) {
-  LLVMAddSCCPPass(PM);
   return Val_unit;
 }
 

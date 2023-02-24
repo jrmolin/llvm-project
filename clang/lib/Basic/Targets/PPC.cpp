@@ -18,11 +18,11 @@
 using namespace clang;
 using namespace clang::targets;
 
-const Builtin::Info PPCTargetInfo::BuiltinInfo[] = {
+static constexpr Builtin::Info BuiltinInfo[] = {
 #define BUILTIN(ID, TYPE, ATTRS)                                               \
-  {#ID, TYPE, ATTRS, nullptr, ALL_LANGUAGES, nullptr},
+  {#ID, TYPE, ATTRS, nullptr, HeaderDesc::NO_HEADER, ALL_LANGUAGES},
 #define LIBBUILTIN(ID, TYPE, ATTRS, HEADER)                                    \
-  {#ID, TYPE, ATTRS, HEADER, ALL_LANGUAGES, nullptr},
+  {#ID, TYPE, ATTRS, nullptr, HeaderDesc::HEADER, ALL_LANGUAGES},
 #include "clang/Basic/BuiltinsPPC.def"
 };
 
@@ -252,6 +252,8 @@ static void defineXLCompatMacros(MacroBuilder &Builder) {
   Builder.defineMacro("__test_data_class", "__builtin_ppc_test_data_class");
   Builder.defineMacro("__swdiv", "__builtin_ppc_swdiv");
   Builder.defineMacro("__swdivs", "__builtin_ppc_swdivs");
+  Builder.defineMacro("__fnabs", "__builtin_ppc_fnabs");
+  Builder.defineMacro("__fnabss", "__builtin_ppc_fnabss");
   Builder.defineMacro("__builtin_maxfe", "__builtin_ppc_maxfe");
   Builder.defineMacro("__builtin_maxfl", "__builtin_ppc_maxfl");
   Builder.defineMacro("__builtin_maxfs", "__builtin_ppc_maxfs");
@@ -279,7 +281,6 @@ void PPCTargetInfo::getTargetDefines(const LangOptions &Opts,
   if (PointerWidth == 64) {
     Builder.defineMacro("_ARCH_PPC64");
     Builder.defineMacro("__powerpc64__");
-    Builder.defineMacro("__ppc64__");
     Builder.defineMacro("__PPC64__");
   } else if (getTriple().isOSAIX()) {
     // The XL compilers on AIX define _ARCH_PPC64 for both 32 and 64-bit modes.
@@ -549,6 +550,7 @@ bool PPCTargetInfo::initFeatureMap(
                                           .Case("pwr9", true)
                                           .Case("pwr8", true)
                                           .Case("pwr7", true)
+                                          .Case("a2", true)
                                           .Default(false);
 
   Features["isa-v207-instructions"] = llvm::StringSwitch<bool>(CPU)
@@ -591,12 +593,12 @@ bool PPCTargetInfo::initFeatureMap(
   }
 
   if (!(ArchDefs & ArchDefinePwr10)) {
-    if (llvm::find(FeaturesVec, "+mma") != FeaturesVec.end()) {
+    if (llvm::is_contained(FeaturesVec, "+mma")) {
       // MMA operations are not available pre-Power10.
       Diags.Report(diag::err_opt_not_valid_with_opt) << "-mmma" << CPU;
       return false;
     }
-    if (llvm::find(FeaturesVec, "+pcrel") != FeaturesVec.end()) {
+    if (llvm::is_contained(FeaturesVec, "+pcrel")) {
       // PC-Relative instructions are not available pre-Power10,
       // and these instructions also require prefixed instructions support.
       Diags.Report(diag::err_opt_not_valid_without_opt)
@@ -604,13 +606,13 @@ bool PPCTargetInfo::initFeatureMap(
           << "-mcpu=pwr10 -mprefixed";
       return false;
     }
-    if (llvm::find(FeaturesVec, "+prefixed") != FeaturesVec.end()) {
+    if (llvm::is_contained(FeaturesVec, "+prefixed")) {
       // Prefixed instructions are not available pre-Power10.
       Diags.Report(diag::err_opt_not_valid_without_opt) << "-mprefixed"
                                                         << "-mcpu=pwr10";
       return false;
     }
-    if (llvm::find(FeaturesVec, "+paired-vector-memops") != FeaturesVec.end()) {
+    if (llvm::is_contained(FeaturesVec, "+paired-vector-memops")) {
       // Paired vector memops are not available pre-Power10.
       Diags.Report(diag::err_opt_not_valid_without_opt)
           << "-mpaired-vector-memops"
@@ -752,7 +754,7 @@ const char *const PPCTargetInfo::GCCRegNames[] = {
 };
 
 ArrayRef<const char *> PPCTargetInfo::getGCCRegNames() const {
-  return llvm::makeArrayRef(GCCRegNames);
+  return llvm::ArrayRef(GCCRegNames);
 }
 
 const TargetInfo::GCCRegAlias PPCTargetInfo::GCCRegAliases[] = {
@@ -783,7 +785,7 @@ const TargetInfo::GCCRegAlias PPCTargetInfo::GCCRegAliases[] = {
 };
 
 ArrayRef<TargetInfo::GCCRegAlias> PPCTargetInfo::getGCCRegAliases() const {
-  return llvm::makeArrayRef(GCCRegAliases);
+  return llvm::ArrayRef(GCCRegAliases);
 }
 
 // PPC ELFABIv2 DWARF Definitoin "Table 2.26. Mappings of Common Registers".
@@ -811,7 +813,7 @@ const TargetInfo::AddlRegName GCCAddlRegNames[] = {
 
 ArrayRef<TargetInfo::AddlRegName> PPCTargetInfo::getGCCAddlRegNames() const {
   if (ABI == "elfv2")
-    return llvm::makeArrayRef(GCCAddlRegNames);
+    return llvm::ArrayRef(GCCAddlRegNames);
   else 
     return TargetInfo::getGCCAddlRegNames(); 
 }
@@ -846,9 +848,12 @@ void PPCTargetInfo::adjust(DiagnosticsEngine &Diags, LangOptions &Opts) {
                            ? &llvm::APFloat::IEEEquad()
                            : &llvm::APFloat::PPCDoubleDouble();
   Opts.IEEE128 = 1;
+  if (getTriple().isOSAIX() && Opts.EnableAIXQuadwordAtomicsABI &&
+      HasQuadwordAtomics)
+    MaxAtomicInlineWidth = 128;
 }
 
 ArrayRef<Builtin::Info> PPCTargetInfo::getTargetBuiltins() const {
-  return llvm::makeArrayRef(BuiltinInfo, clang::PPC::LastTSBuiltin -
-                                             Builtin::FirstTSBuiltin);
+  return llvm::ArrayRef(BuiltinInfo,
+                        clang::PPC::LastTSBuiltin - Builtin::FirstTSBuiltin);
 }

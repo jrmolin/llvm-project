@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import * as vscodelc from 'vscode-languageclient';
+import * as vscodelc from 'vscode-languageclient/node';
 
 import * as config from './config';
 import * as configWatcher from './configWatcher';
@@ -11,7 +11,7 @@ import * as configWatcher from './configWatcher';
  */
 class WorkspaceFolderContext implements vscode.Disposable {
   dispose() {
-    this.clients.forEach(client => client.stop());
+    this.clients.forEach(async client => await client.stop());
     this.clients.clear();
   }
 
@@ -25,50 +25,24 @@ class WorkspaceFolderContext implements vscode.Disposable {
 export class MLIRContext implements vscode.Disposable {
   subscriptions: vscode.Disposable[] = [];
   workspaceFolders: Map<string, WorkspaceFolderContext> = new Map();
+  outputChannel: vscode.OutputChannel;
 
   /**
    *  Activate the MLIR context, and start the language clients.
    */
   async activate(outputChannel: vscode.OutputChannel) {
+    this.outputChannel = outputChannel;
+
     // This lambda is used to lazily start language clients for the given
     // document. It removes the need to pro-actively start language clients for
     // every folder within the workspace and every language type we provide.
     const startClientOnOpenDocument = async (document: vscode.TextDocument) => {
-      if (document.uri.scheme !== 'file') {
-        return;
-      }
-      let serverSettingName: string;
-      if (document.languageId === 'mlir') {
-        serverSettingName = 'server_path';
-      } else if (document.languageId === 'pdll') {
-        serverSettingName = 'pdll_server_path';
-      } else {
-        return;
-      }
-
-      // Resolve the workspace folder if this document is in one. We use the
-      // workspace folder when determining if a server needs to be started.
-      const uri = document.uri;
-      let workspaceFolder = vscode.workspace.getWorkspaceFolder(uri);
-      let workspaceFolderStr =
-          workspaceFolder ? workspaceFolder.uri.toString() : "";
-
-      // Get or create a client context for this folder.
-      let folderContext = this.workspaceFolders.get(workspaceFolderStr);
-      if (!folderContext) {
-        folderContext = new WorkspaceFolderContext();
-        this.workspaceFolders.set(workspaceFolderStr, folderContext);
-      }
-      // Start the client for this language if necessary.
-      if (!folderContext.clients.has(document.languageId)) {
-        let client = await this.activateWorkspaceFolder(
-            workspaceFolder, serverSettingName, document.languageId,
-            outputChannel);
-        folderContext.clients.set(document.languageId, client);
-      }
+      await this.getOrActivateLanguageClient(document.uri, document.languageId);
     };
     // Process any existing documents.
-    vscode.workspace.textDocuments.forEach(startClientOnOpenDocument);
+    for (const textDoc of vscode.workspace.textDocuments) {
+      await startClientOnOpenDocument(textDoc);
+    }
 
     // Watch any new documents to spawn servers when necessary.
     this.subscriptions.push(
@@ -86,23 +60,66 @@ export class MLIRContext implements vscode.Disposable {
   }
 
   /**
-   *  Prepare the server options for a PDLL server, e.g. populating any
-   *  accessible compilation databases.
+   * Open or return a language server for the given uri and language.
    */
-  async preparePDLLServerOptions(workspaceFolder: vscode.WorkspaceFolder,
-                                 configsToWatch: string[],
-                                 pathsToWatch: string[],
-                                 additionalServerArgs: string[]) {
+  async getOrActivateLanguageClient(uri: vscode.Uri, languageId: string):
+      Promise<vscodelc.LanguageClient> {
+    let serverSettingName: string;
+    if (languageId === 'mlir') {
+      serverSettingName = 'server_path';
+    } else if (languageId === 'pdll') {
+      serverSettingName = 'pdll_server_path';
+    } else if (languageId === 'tablegen') {
+      serverSettingName = 'tablegen_server_path';
+    } else {
+      return null;
+    }
+
+    // Check the scheme of the uri.
+    let validSchemes = [ 'file', 'mlir.bytecode-mlir' ];
+    if (!validSchemes.includes(uri.scheme)) {
+      return null;
+    }
+
+    // Resolve the workspace folder if this document is in one. We use the
+    // workspace folder when determining if a server needs to be started.
+    let workspaceFolder = vscode.workspace.getWorkspaceFolder(uri);
+    let workspaceFolderStr =
+        workspaceFolder ? workspaceFolder.uri.toString() : "";
+
+    // Get or create a client context for this folder.
+    let folderContext = this.workspaceFolders.get(workspaceFolderStr);
+    if (!folderContext) {
+      folderContext = new WorkspaceFolderContext();
+      this.workspaceFolders.set(workspaceFolderStr, folderContext);
+    }
+    // Start the client for this language if necessary.
+    let client = folderContext.clients.get(languageId);
+    if (!client) {
+      client = await this.activateWorkspaceFolder(
+          workspaceFolder, serverSettingName, languageId, this.outputChannel);
+      folderContext.clients.set(languageId, client);
+    }
+    return client;
+  }
+
+  /**
+   *  Prepare a compilation database option for a server.
+   */
+  async prepareCompilationDatabaseServerOptions(
+      languageName: string, workspaceFolder: vscode.WorkspaceFolder,
+      configsToWatch: string[], pathsToWatch: string[],
+      additionalServerArgs: string[]) {
     // Process the compilation databases attached for the workspace folder.
-    let databases =
-        config.get<string[]>('pdll_compilation_databases', workspaceFolder);
+    let databases = config.get<string[]>(
+        `${languageName}_compilation_databases`, workspaceFolder, []);
 
     // If no databases were explicitly specified, default to a database in the
     // 'build' directory within the current workspace.
     if (databases.length === 0) {
       if (workspaceFolder) {
         databases.push(workspaceFolder.uri.fsPath +
-                       '/build/pdll_compile_commands.yml');
+                       `/build/${languageName}_compile_commands.yml`);
       }
 
       // Otherwise, try to resolve each of the paths.
@@ -112,14 +129,40 @@ export class MLIRContext implements vscode.Disposable {
       }
     }
 
-    configsToWatch.push('pdll_compilation_databases');
+    configsToWatch.push(`${languageName}_compilation_databases`);
     pathsToWatch.push(...databases);
 
     // Setup the compilation databases as additional arguments to pass to the
     // server.
     databases.filter(database => database !== '');
     additionalServerArgs.push(...databases.map(
-        (database) => `--pdll-compilation-database=${database}`));
+        (database) => `--${languageName}-compilation-database=${database}`));
+  }
+
+  /**
+   *  Prepare the server options for a PDLL server, e.g. populating any
+   *  accessible compilation databases.
+   */
+  async preparePDLLServerOptions(workspaceFolder: vscode.WorkspaceFolder,
+                                 configsToWatch: string[],
+                                 pathsToWatch: string[],
+                                 additionalServerArgs: string[]) {
+    await this.prepareCompilationDatabaseServerOptions(
+        'pdll', workspaceFolder, configsToWatch, pathsToWatch,
+        additionalServerArgs);
+  }
+
+  /**
+   *  Prepare the server options for a TableGen server, e.g. populating any
+   *  accessible compilation databases.
+   */
+  async prepareTableGenServerOptions(workspaceFolder: vscode.WorkspaceFolder,
+                                     configsToWatch: string[],
+                                     pathsToWatch: string[],
+                                     additionalServerArgs: string[]) {
+    await this.prepareCompilationDatabaseServerOptions(
+        'tablegen', workspaceFolder, configsToWatch, pathsToWatch,
+        additionalServerArgs);
   }
 
   /**
@@ -139,6 +182,10 @@ export class MLIRContext implements vscode.Disposable {
       await this.preparePDLLServerOptions(workspaceFolder, configsToWatch,
                                           filepathsToWatch,
                                           additionalServerArgs);
+    } else if (languageName == 'tablegen') {
+      await this.prepareTableGenServerOptions(workspaceFolder, configsToWatch,
+                                              filepathsToWatch,
+                                              additionalServerArgs);
     }
 
     // Try to activate the language client.
@@ -196,16 +243,8 @@ export class MLIRContext implements vscode.Disposable {
 
     // Configure the server options.
     const serverOptions: vscodelc.ServerOptions = {
-      run : {
-        command : serverPath,
-        transport : vscodelc.TransportKind.stdio,
-        args : additionalServerArgs
-      },
-      debug : {
-        command : serverPath,
-        transport : vscodelc.TransportKind.stdio,
-        args : additionalServerArgs
-      }
+      command : serverPath,
+      args : additionalServerArgs
     };
 
     // Configure file patterns relative to the workspace folder.
@@ -226,10 +265,11 @@ export class MLIRContext implements vscode.Disposable {
     let middleware = {};
     if (!workspaceFolder) {
       middleware = {
-        didOpen : (document, next) => {
+        didOpen : (document, next) : Promise<void> => {
           if (!vscode.workspace.getWorkspaceFolder(document.uri)) {
-            next(document);
+            return next(document);
           }
+          return Promise.resolve();
         }
       };
     }
@@ -237,7 +277,7 @@ export class MLIRContext implements vscode.Disposable {
     // Configure the client options.
     const clientOptions: vscodelc.LanguageClientOptions = {
       documentSelector : [
-        {scheme : 'file', language : languageName, pattern : selectorPattern}
+        {language : languageName, pattern : selectorPattern},
       ],
       synchronize : {
         // Notify the server about file changes to language files contained in
@@ -246,7 +286,10 @@ export class MLIRContext implements vscode.Disposable {
       },
       outputChannel : outputChannel,
       workspaceFolder : workspaceFolder,
-      middleware : middleware
+      middleware : middleware,
+
+      // Don't switch to output window when the server returns output.
+      revealOutputChannelOn : vscodelc.RevealOutputChannelOn.Never,
     };
 
     // Create the language client and start the client.
@@ -265,6 +308,9 @@ export class MLIRContext implements vscode.Disposable {
     }
     if (serverSettingName === 'server_path') {
       return 'mlir-lsp-server';
+    }
+    if (serverSettingName === 'tablegen_server_path') {
+      return 'tblgen-lsp-server';
     }
     return '';
   }
@@ -318,6 +364,22 @@ export class MLIRContext implements vscode.Disposable {
     const serverPath = config.get<string>(serverSettingName, workspaceFolder);
     const defaultPath = MLIRContext.getDefaultServerFilename(serverSettingName);
     return this.resolvePath(serverPath, defaultPath, workspaceFolder);
+  }
+
+  /**
+   * Return the language client for the given language and uri, or null if no
+   * client is active.
+   */
+  getLanguageClient(uri: vscode.Uri,
+                    languageName: string): vscodelc.LanguageClient {
+    let workspaceFolder = vscode.workspace.getWorkspaceFolder(uri);
+    let workspaceFolderStr =
+        workspaceFolder ? workspaceFolder.uri.toString() : "";
+    let folderContext = this.workspaceFolders.get(workspaceFolderStr);
+    if (!folderContext) {
+      return null;
+    }
+    return folderContext.clients.get(languageName);
   }
 
   dispose() {

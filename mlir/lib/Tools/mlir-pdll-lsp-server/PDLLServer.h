@@ -13,18 +13,24 @@
 #include "llvm/ADT/StringRef.h"
 #include <memory>
 #include <string>
+#include <optional>
 
 namespace mlir {
 namespace lsp {
 struct Diagnostic;
 class CompilationDatabase;
+struct PDLLViewOutputResult;
+enum class PDLLViewOutputKind;
 struct CompletionList;
 struct DocumentLink;
 struct DocumentSymbol;
 struct Hover;
+struct InlayHint;
 struct Location;
 struct Position;
+struct Range;
 struct SignatureHelp;
+struct TextDocumentContentChangeEvent;
 class URIForFile;
 
 /// This class implements all of the PDLL related functionality necessary for a
@@ -48,17 +54,21 @@ public:
   PDLLServer(const Options &options);
   ~PDLLServer();
 
-  /// Add or update the document, with the provided `version`, at the given URI.
-  /// Any diagnostics emitted for this document should be added to
-  /// `diagnostics`.
-  void addOrUpdateDocument(const URIForFile &uri, StringRef contents,
-                           int64_t version,
-                           std::vector<Diagnostic> &diagnostics);
+  /// Add the document, with the provided `version`, at the given URI. Any
+  /// diagnostics emitted for this document should be added to `diagnostics`.
+  void addDocument(const URIForFile &uri, StringRef contents, int64_t version,
+                   std::vector<Diagnostic> &diagnostics);
+
+  /// Update the document, with the provided `version`, at the given URI. Any
+  /// diagnostics emitted for this document should be added to `diagnostics`.
+  void updateDocument(const URIForFile &uri,
+                      ArrayRef<TextDocumentContentChangeEvent> changes,
+                      int64_t version, std::vector<Diagnostic> &diagnostics);
 
   /// Remove the document with the given uri. Returns the version of the removed
-  /// document, or None if the uri did not have a corresponding document within
-  /// the server.
-  Optional<int64_t> removeDocument(const URIForFile &uri);
+  /// document, or std::nullopt if the uri did not have a corresponding document
+  /// within the server.
+  std::optional<int64_t> removeDocument(const URIForFile &uri);
 
   /// Return the locations of the object pointed at by the given position.
   void getLocationsOf(const URIForFile &uri, const Position &defPos,
@@ -72,9 +82,10 @@ public:
   void getDocumentLinks(const URIForFile &uri,
                         std::vector<DocumentLink> &documentLinks);
 
-  /// Find a hover description for the given hover position, or None if one
-  /// couldn't be found.
-  Optional<Hover> findHover(const URIForFile &uri, const Position &hoverPos);
+  /// Find a hover description for the given hover position, or std::nullopt if
+  /// one couldn't be found.
+  std::optional<Hover> findHover(const URIForFile &uri,
+                                 const Position &hoverPos);
 
   /// Find all of the document symbols within the given file.
   void findDocumentSymbols(const URIForFile &uri,
@@ -87,6 +98,15 @@ public:
   /// Get the signature help for the position within the given file.
   SignatureHelp getSignatureHelp(const URIForFile &uri,
                                  const Position &helpPos);
+
+  /// Get the inlay hints for the range within the given file.
+  void getInlayHints(const URIForFile &uri, const Range &range,
+                     std::vector<InlayHint> &inlayHints);
+
+  /// Get the output of the given PDLL file, or std::nullopt if there is no
+  /// valid output.
+  std::optional<PDLLViewOutputResult>
+  getPDLLViewOutput(const URIForFile &uri, PDLLViewOutputKind kind);
 
 private:
   struct Impl;

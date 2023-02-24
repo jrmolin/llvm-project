@@ -121,7 +121,7 @@ using std::atomic_signal_fence                         // see below
 #  pragma GCC system_header
 #endif
 
-#if _LIBCPP_STD_VER > 20
+#if defined(__cplusplus) && _LIBCPP_STD_VER >= 23
 
 #include <atomic>
 #include <version>
@@ -226,17 +226,10 @@ using std::atomic_thread_fence _LIBCPP_USING_IF_EXISTS;
 // the header. We do this because Clang has historically shipped a <stdatomic.h>
 // header that would be available in all Standard modes, and we don't want to
 // break that use case.
-//
-// However, if the user has already used <atomic> before, the two headers are
-// incompatible before C++23, so we issue a clear error here to avoid obscure
-// issues down the line.
 # if __has_include_next(<stdatomic.h>)
-#   ifdef _LIBCPP_ATOMIC
-#     error <stdatomic.h> is incompatible with <atomic> before C++23. Please compile with -std=c++23.
-#   endif
 #   include_next <stdatomic.h>
 # endif
 
-#endif // _LIBCPP_STD_VER > 20
+#endif // defined(__cplusplus) && _LIBCPP_STD_VER >= 23
 
 #endif // _LIBCPP_STDATOMIC_H

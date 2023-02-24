@@ -22,9 +22,7 @@ using namespace bolt;
 
 Triple::ArchType Relocation::Arch;
 
-namespace {
-
-bool isSupportedX86(uint64_t Type) {
+static bool isSupportedX86(uint64_t Type) {
   switch (Type) {
   default:
     return false;
@@ -46,7 +44,7 @@ bool isSupportedX86(uint64_t Type) {
   }
 }
 
-bool isSupportedAArch64(uint64_t Type) {
+static bool isSupportedAArch64(uint64_t Type) {
   switch (Type) {
   default:
     return false;
@@ -91,7 +89,7 @@ bool isSupportedAArch64(uint64_t Type) {
   }
 }
 
-size_t getSizeForTypeX86(uint64_t Type) {
+static size_t getSizeForTypeX86(uint64_t Type) {
   switch (Type) {
   default:
     errs() << object::getELFRelocationTypeName(ELF::EM_X86_64, Type) << '\n';
@@ -117,7 +115,7 @@ size_t getSizeForTypeX86(uint64_t Type) {
   }
 }
 
-size_t getSizeForTypeAArch64(uint64_t Type) {
+static size_t getSizeForTypeAArch64(uint64_t Type) {
   switch (Type) {
   default:
     errs() << object::getELFRelocationTypeName(ELF::EM_AARCH64, Type) << '\n';
@@ -165,11 +163,19 @@ size_t getSizeForTypeAArch64(uint64_t Type) {
   }
 }
 
-bool skipRelocationProcessX86(uint64_t Type, uint64_t Contents) {
+static bool skipRelocationTypeX86(uint64_t Type) {
+  return Type == ELF::R_X86_64_NONE;
+}
+
+static bool skipRelocationTypeAArch64(uint64_t Type) {
+  return Type == ELF::R_AARCH64_NONE || Type == ELF::R_AARCH64_LD_PREL_LO19;
+}
+
+static bool skipRelocationProcessX86(uint64_t &Type, uint64_t Contents) {
   return false;
 }
 
-bool skipRelocationProcessAArch64(uint64_t Type, uint64_t Contents) {
+static bool skipRelocationProcessAArch64(uint64_t &Type, uint64_t Contents) {
   auto IsMov = [](uint64_t Contents) -> bool {
     // The bits 28-23 are 0b100101
     return (Contents & 0x1f800000) == 0x12800000;
@@ -185,11 +191,24 @@ bool skipRelocationProcessAArch64(uint64_t Type, uint64_t Contents) {
     return (Contents & 0x9f000000) == 0x10000000;
   };
 
+  auto IsAddImm = [](uint64_t Contents) -> bool {
+    // The bits 30-23 are 0b00100010
+    return (Contents & 0x7F800000) == 0x11000000;
+  };
+
   auto IsNop = [](uint64_t Contents) -> bool { return Contents == 0xd503201f; };
 
   // The linker might eliminate the instruction and replace it with NOP, ignore
   if (IsNop(Contents))
     return true;
+
+  // The linker might relax ADRP+LDR instruction sequence for loading symbol
+  // address from GOT table to ADRP+ADD sequence that would point to the
+  // binary-local symbol. Change relocation type in order to process it right.
+  if (Type == ELF::R_AARCH64_LD64_GOT_LO12_NC && IsAddImm(Contents)) {
+    Type = ELF::R_AARCH64_ADD_ABS_LO12_NC;
+    return false;
+  }
 
   // The linker might perform TLS relocations relaxations, such as
   // changed TLS access model (e.g. changed global dynamic model
@@ -243,7 +262,7 @@ bool skipRelocationProcessAArch64(uint64_t Type, uint64_t Contents) {
   return false;
 }
 
-uint64_t adjustValueX86(uint64_t Type, uint64_t Value, uint64_t PC) {
+static uint64_t adjustValueX86(uint64_t Type, uint64_t Value, uint64_t PC) {
   switch (Type) {
   default:
     llvm_unreachable("not supported relocation");
@@ -256,7 +275,7 @@ uint64_t adjustValueX86(uint64_t Type, uint64_t Value, uint64_t PC) {
   return Value;
 }
 
-uint64_t adjustValueAArch64(uint64_t Type, uint64_t Value, uint64_t PC) {
+static uint64_t adjustValueAArch64(uint64_t Type, uint64_t Value, uint64_t PC) {
   switch (Type) {
   default:
     llvm_unreachable("not supported relocation");
@@ -271,7 +290,7 @@ uint64_t adjustValueAArch64(uint64_t Type, uint64_t Value, uint64_t PC) {
   return Value;
 }
 
-uint64_t extractValueX86(uint64_t Type, uint64_t Contents, uint64_t PC) {
+static uint64_t extractValueX86(uint64_t Type, uint64_t Contents, uint64_t PC) {
   if (Type == ELF::R_X86_64_32S)
     return SignExtend64<32>(Contents);
   if (Relocation::isPCRelative(Type))
@@ -279,7 +298,8 @@ uint64_t extractValueX86(uint64_t Type, uint64_t Contents, uint64_t PC) {
   return Contents;
 }
 
-uint64_t extractValueAArch64(uint64_t Type, uint64_t Contents, uint64_t PC) {
+static uint64_t extractValueAArch64(uint64_t Type, uint64_t Contents,
+                                    uint64_t PC) {
   switch (Type) {
   default:
     errs() << object::getELFRelocationTypeName(ELF::EM_AARCH64, Type) << '\n';
@@ -386,7 +406,7 @@ uint64_t extractValueAArch64(uint64_t Type, uint64_t Contents, uint64_t PC) {
   }
 }
 
-bool isGOTX86(uint64_t Type) {
+static bool isGOTX86(uint64_t Type) {
   switch (Type) {
   default:
     return false;
@@ -406,7 +426,7 @@ bool isGOTX86(uint64_t Type) {
   }
 }
 
-bool isGOTAArch64(uint64_t Type) {
+static bool isGOTAArch64(uint64_t Type) {
   switch (Type) {
   default:
     return false;
@@ -423,7 +443,7 @@ bool isGOTAArch64(uint64_t Type) {
   }
 }
 
-bool isTLSX86(uint64_t Type) {
+static bool isTLSX86(uint64_t Type) {
   switch (Type) {
   default:
     return false;
@@ -434,7 +454,7 @@ bool isTLSX86(uint64_t Type) {
   }
 }
 
-bool isTLSAArch64(uint64_t Type) {
+static bool isTLSAArch64(uint64_t Type) {
   switch (Type) {
   default:
     return false;
@@ -451,7 +471,7 @@ bool isTLSAArch64(uint64_t Type) {
   }
 }
 
-bool isPCRelativeX86(uint64_t Type) {
+static bool isPCRelativeX86(uint64_t Type) {
   switch (Type) {
   default:
     llvm_unreachable("Unknown relocation type");
@@ -476,7 +496,7 @@ bool isPCRelativeX86(uint64_t Type) {
   }
 }
 
-bool isPCRelativeAArch64(uint64_t Type) {
+static bool isPCRelativeAArch64(uint64_t Type) {
   switch (Type) {
   default:
     llvm_unreachable("Unknown relocation type");
@@ -522,8 +542,6 @@ bool isPCRelativeAArch64(uint64_t Type) {
   }
 }
 
-} // end anonymous namespace
-
 bool Relocation::isSupported(uint64_t Type) {
   if (Arch == Triple::aarch64)
     return isSupportedAArch64(Type);
@@ -536,7 +554,13 @@ size_t Relocation::getSizeForType(uint64_t Type) {
   return getSizeForTypeX86(Type);
 }
 
-bool Relocation::skipRelocationProcess(uint64_t Type, uint64_t Contents) {
+bool Relocation::skipRelocationType(uint64_t Type) {
+  if (Arch == Triple::aarch64)
+    return skipRelocationTypeAArch64(Type);
+  return skipRelocationTypeX86(Type);
+}
+
+bool Relocation::skipRelocationProcess(uint64_t &Type, uint64_t Contents) {
   if (Arch == Triple::aarch64)
     return skipRelocationProcessAArch64(Type, Contents);
   return skipRelocationProcessX86(Type, Contents);
@@ -560,6 +584,12 @@ bool Relocation::isGOT(uint64_t Type) {
   if (Arch == Triple::aarch64)
     return isGOTAArch64(Type);
   return isGOTX86(Type);
+}
+
+bool Relocation::isX86GOTPCRELX(uint64_t Type) {
+  if (Arch != Triple::x86_64)
+    return false;
+  return Type == ELF::R_X86_64_GOTPCRELX || Type == ELF::R_X86_64_REX_GOTPCRELX;
 }
 
 bool Relocation::isNone(uint64_t Type) { return Type == getNone(); }
@@ -604,6 +634,12 @@ bool Relocation::isPCRelative(uint64_t Type) {
   if (Arch == Triple::aarch64)
     return isPCRelativeAArch64(Type);
   return isPCRelativeX86(Type);
+}
+
+uint64_t Relocation::getAbs64() {
+  if (Arch == Triple::aarch64)
+    return ELF::R_AARCH64_ABS64;
+  return ELF::R_X86_64_64;
 }
 
 size_t Relocation::emit(MCStreamer *Streamer) const {

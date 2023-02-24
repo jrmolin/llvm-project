@@ -18,19 +18,19 @@
 #include <random>
 #include <set>
 
-TEST(ScudoReleaseTest, PackedCounterArray) {
+TEST(ScudoReleaseTest, RegionPageMap) {
   for (scudo::uptr I = 0; I < SCUDO_WORDSIZE; I++) {
     // Various valid counter's max values packed into one word.
-    scudo::PackedCounterArray Counters2N(1U, 1U, 1UL << I);
-    EXPECT_EQ(sizeof(scudo::uptr), Counters2N.getBufferSize());
+    scudo::RegionPageMap PageMap2N(1U, 1U, 1UL << I);
+    EXPECT_EQ(sizeof(scudo::uptr), PageMap2N.getBufferSize());
     // Check the "all bit set" values too.
-    scudo::PackedCounterArray Counters2N1_1(1U, 1U, ~0UL >> I);
-    EXPECT_EQ(sizeof(scudo::uptr), Counters2N1_1.getBufferSize());
+    scudo::RegionPageMap PageMap2N1_1(1U, 1U, ~0UL >> I);
+    EXPECT_EQ(sizeof(scudo::uptr), PageMap2N1_1.getBufferSize());
     // Verify the packing ratio, the counter is Expected to be packed into the
     // closest power of 2 bits.
-    scudo::PackedCounterArray Counters(1U, SCUDO_WORDSIZE, 1UL << I);
-    EXPECT_EQ(sizeof(scudo::uptr) * scudo::roundUpToPowerOfTwo(I + 1),
-              Counters.getBufferSize());
+    scudo::RegionPageMap PageMap(1U, SCUDO_WORDSIZE, 1UL << I);
+    EXPECT_EQ(sizeof(scudo::uptr) * scudo::roundUpPowerOfTwo(I + 1),
+              PageMap.getBufferSize());
   }
 
   // Go through 1, 2, 4, 8, .. {32,64} bits per counter.
@@ -38,21 +38,42 @@ TEST(ScudoReleaseTest, PackedCounterArray) {
     // Make sure counters request one memory page for the buffer.
     const scudo::uptr NumCounters =
         (scudo::getPageSizeCached() / 8) * (SCUDO_WORDSIZE >> I);
-    scudo::PackedCounterArray Counters(1U, NumCounters,
+    scudo::RegionPageMap PageMap(1U, NumCounters,
                                        1UL << ((1UL << I) - 1));
-    Counters.inc(0U, 0U);
+    PageMap.inc(0U, 0U);
     for (scudo::uptr C = 1; C < NumCounters - 1; C++) {
-      EXPECT_EQ(0UL, Counters.get(0U, C));
-      Counters.inc(0U, C);
-      EXPECT_EQ(1UL, Counters.get(0U, C - 1));
+      EXPECT_EQ(0UL, PageMap.get(0U, C));
+      PageMap.inc(0U, C);
+      EXPECT_EQ(1UL, PageMap.get(0U, C - 1));
     }
-    EXPECT_EQ(0UL, Counters.get(0U, NumCounters - 1));
-    Counters.inc(0U, NumCounters - 1);
+    EXPECT_EQ(0UL, PageMap.get(0U, NumCounters - 1));
+    PageMap.inc(0U, NumCounters - 1);
     if (I > 0) {
-      Counters.incRange(0u, 0U, NumCounters - 1);
+      PageMap.incRange(0u, 0U, NumCounters - 1);
       for (scudo::uptr C = 0; C < NumCounters; C++)
-        EXPECT_EQ(2UL, Counters.get(0U, C));
+        EXPECT_EQ(2UL, PageMap.get(0U, C));
     }
+  }
+
+  // Similar to the above except that we are using incN().
+  for (scudo::uptr I = 0; (SCUDO_WORDSIZE >> I) != 0; I++) {
+    // Make sure counters request one memory page for the buffer.
+    const scudo::uptr NumCounters =
+        (scudo::getPageSizeCached() / 8) * (SCUDO_WORDSIZE >> I);
+    scudo::uptr MaxValue = 1UL << ((1UL << I) - 1);
+    if (MaxValue <= 1U)
+      continue;
+
+    scudo::RegionPageMap PageMap(1U, NumCounters, MaxValue);
+
+    scudo::uptr N = MaxValue / 2;
+    PageMap.incN(0U, 0, N);
+    for (scudo::uptr C = 1; C < NumCounters; C++) {
+      EXPECT_EQ(0UL, PageMap.get(0U, C));
+      PageMap.incN(0U, C, N);
+      EXPECT_EQ(N, PageMap.get(0U, C - 1));
+    }
+    EXPECT_EQ(N, PageMap.get(0U, NumCounters - 1));
   }
 }
 
@@ -102,7 +123,7 @@ TEST(ScudoReleaseTest, FreePagesRangeTracker) {
 
   for (auto TestCase : TestCases) {
     StringRangeRecorder Recorder;
-    RangeTracker Tracker(&Recorder);
+    RangeTracker Tracker(Recorder);
     for (scudo::uptr I = 0; TestCase[I] != 0; I++)
       Tracker.processNextPage(TestCase[I] == 'x');
     Tracker.finish();
@@ -130,28 +151,29 @@ public:
 
 // Simplified version of a TransferBatch.
 template <class SizeClassMap> struct FreeBatch {
-  static const scudo::u32 MaxCount = SizeClassMap::MaxNumCachedHint;
+  static const scudo::u16 MaxCount = SizeClassMap::MaxNumCachedHint;
   void clear() { Count = 0; }
   void add(scudo::uptr P) {
     DCHECK_LT(Count, MaxCount);
     Batch[Count++] = P;
   }
-  scudo::u32 getCount() const { return Count; }
-  scudo::uptr get(scudo::u32 I) const {
+  scudo::u16 getCount() const { return Count; }
+  scudo::uptr get(scudo::u16 I) const {
     DCHECK_LE(I, Count);
     return Batch[I];
   }
   FreeBatch *Next;
 
 private:
-  scudo::u32 Count;
   scudo::uptr Batch[MaxCount];
+  scudo::u16 Count;
 };
 
 template <class SizeClassMap> void testReleaseFreeMemoryToOS() {
   typedef FreeBatch<SizeClassMap> Batch;
   const scudo::uptr PagesCount = 1024;
   const scudo::uptr PageSize = scudo::getPageSizeCached();
+  const scudo::uptr PageSizeLog = scudo::getLog2(PageSize);
   std::mt19937 R;
   scudo::u32 RandState = 42;
 
@@ -195,8 +217,14 @@ template <class SizeClassMap> void testReleaseFreeMemoryToOS() {
     auto SkipRegion = [](UNUSED scudo::uptr RegionIndex) { return false; };
     auto DecompactPtr = [](scudo::uptr P) { return P; };
     ReleasedPagesRecorder Recorder;
-    releaseFreeMemoryToOS(FreeList, MaxBlocks * BlockSize, 1U, BlockSize,
-                          &Recorder, DecompactPtr, SkipRegion);
+    scudo::PageReleaseContext Context(BlockSize,
+                                      /*RegionSize=*/MaxBlocks * BlockSize,
+                                      /*NumberOfRegions=*/1U);
+    ASSERT_FALSE(Context.hasBlockMarked());
+    Context.markFreeBlocks(FreeList, DecompactPtr, Recorder.getBase());
+    ASSERT_TRUE(Context.hasBlockMarked());
+    releaseFreeMemoryToOS(Context, Recorder, SkipRegion);
+    scudo::RegionPageMap &PageMap = Context.PageMap;
 
     // Verify that there are no released pages touched by used chunks and all
     // ranges of free chunks big enough to contain the entire memory pages had
@@ -223,17 +251,20 @@ template <class SizeClassMap> void testReleaseFreeMemoryToOS() {
           const bool PageReleased = Recorder.ReportedPages.find(J * PageSize) !=
                                     Recorder.ReportedPages.end();
           EXPECT_EQ(false, PageReleased);
+          EXPECT_EQ(false,
+                    PageMap.isAllCounted(0, (J * PageSize) >> PageSizeLog));
         }
 
         if (InFreeRange) {
           InFreeRange = false;
           // Verify that all entire memory pages covered by this range of free
           // chunks were released.
-          scudo::uptr P = scudo::roundUpTo(CurrentFreeRangeStart, PageSize);
+          scudo::uptr P = scudo::roundUp(CurrentFreeRangeStart, PageSize);
           while (P + PageSize <= CurrentBlock) {
             const bool PageReleased =
                 Recorder.ReportedPages.find(P) != Recorder.ReportedPages.end();
             EXPECT_EQ(true, PageReleased);
+            EXPECT_EQ(true, PageMap.isAllCounted(0, P >> PageSizeLog));
             VerifiedReleasedPages++;
             P += PageSize;
           }
@@ -244,13 +275,14 @@ template <class SizeClassMap> void testReleaseFreeMemoryToOS() {
     }
 
     if (InFreeRange) {
-      scudo::uptr P = scudo::roundUpTo(CurrentFreeRangeStart, PageSize);
+      scudo::uptr P = scudo::roundUp(CurrentFreeRangeStart, PageSize);
       const scudo::uptr EndPage =
-          scudo::roundUpTo(MaxBlocks * BlockSize, PageSize);
+          scudo::roundUp(MaxBlocks * BlockSize, PageSize);
       while (P + PageSize <= EndPage) {
         const bool PageReleased =
             Recorder.ReportedPages.find(P) != Recorder.ReportedPages.end();
         EXPECT_EQ(true, PageReleased);
+        EXPECT_EQ(true, PageMap.isAllCounted(0, P >> PageSizeLog));
         VerifiedReleasedPages++;
         P += PageSize;
       }
@@ -266,6 +298,109 @@ template <class SizeClassMap> void testReleaseFreeMemoryToOS() {
   }
 }
 
+template <class SizeClassMap> void testPageMapMarkRange() {
+  const scudo::uptr PageSize = scudo::getPageSizeCached();
+
+  for (scudo::uptr I = 1; I <= SizeClassMap::LargestClassId; I++) {
+    const scudo::uptr BlockSize = SizeClassMap::getSizeByClassId(I);
+
+    const scudo::uptr GroupNum = 2;
+    const scudo::uptr GroupSize = scudo::roundUp(BlockSize, PageSize) * 2;
+    const scudo::uptr RegionSize =
+        scudo::roundUpSlow(GroupSize * GroupNum, BlockSize);
+    const scudo::uptr RoundedRegionSize = scudo::roundUp(RegionSize, PageSize);
+
+    std::vector<scudo::uptr> Pages(RoundedRegionSize / PageSize, 0);
+    for (scudo::uptr Block = 0; Block + BlockSize <= RoundedRegionSize;
+         Block += BlockSize) {
+      for (scudo::uptr page = Block / PageSize;
+           page <= (Block + BlockSize - 1) / PageSize; ++page) {
+        ASSERT_LT(page, Pages.size());
+        ++Pages[page];
+      }
+    }
+
+    for (scudo::uptr GroupId = 0; GroupId < GroupNum; ++GroupId) {
+      const scudo::uptr GroupBeg = GroupId * GroupSize;
+      const scudo::uptr GroupEnd = GroupBeg + GroupSize;
+
+      scudo::PageReleaseContext Context(BlockSize, RegionSize,
+                                        /*NumberOfRegions=*/1U);
+      Context.markRangeAsAllCounted(GroupBeg, GroupEnd, /*Base=*/0);
+
+      scudo::uptr FirstBlock =
+          ((GroupBeg + BlockSize - 1) / BlockSize) * BlockSize;
+
+      // All the pages before first block page are not supposed to be marked.
+      if (FirstBlock / PageSize > 0) {
+        for (scudo::uptr Page = 0; Page <= FirstBlock / PageSize - 1; ++Page)
+          EXPECT_EQ(Context.PageMap.get(/*Region=*/0, Page), 0U);
+      }
+
+      // Verify the pages used by the blocks in the group except that if the
+      // end of the last block is not aligned with `GroupEnd`, it'll be verified
+      // later.
+      scudo::uptr Block;
+      for (Block = FirstBlock; Block + BlockSize <= GroupEnd;
+           Block += BlockSize) {
+        for (scudo::uptr Page = Block / PageSize;
+             Page <= (Block + BlockSize - 1) / PageSize; ++Page) {
+          // First used page in the group has two cases, which are w/ and w/o
+          // block sitting across the boundary.
+          if (Page == FirstBlock / PageSize) {
+            if (FirstBlock % PageSize == 0) {
+              EXPECT_TRUE(Context.PageMap.isAllCounted(/*Region=*/0U, Page));
+            } else {
+              // There's a block straddling `GroupBeg`, it's supposed to only
+              // increment the counter and we expect it should be 1 less
+              // (exclude the straddling one) than the total blocks on the page.
+              EXPECT_EQ(Context.PageMap.get(/*Region=*/0U, Page),
+                        Pages[Page] - 1);
+            }
+          } else {
+            EXPECT_TRUE(Context.PageMap.isAllCounted(/*Region=*/0, Page));
+          }
+        }
+      }
+
+      if (Block == GroupEnd)
+        continue;
+
+      // Examine the last block which sits across the group boundary.
+      if (Block + BlockSize == RegionSize) {
+        // This is the last block in the region, it's supposed to mark all the
+        // pages as all counted.
+        for (scudo::uptr Page = Block / PageSize;
+             Page <= (Block + BlockSize - 1) / PageSize; ++Page) {
+          EXPECT_TRUE(Context.PageMap.isAllCounted(/*Region=*/0, Page));
+        }
+      } else {
+        for (scudo::uptr Page = Block / PageSize;
+             Page <= (Block + BlockSize - 1) / PageSize; ++Page) {
+          if (Page <= (GroupEnd - 1) / PageSize)
+            EXPECT_TRUE(Context.PageMap.isAllCounted(/*Region=*/0, Page));
+          else
+            EXPECT_EQ(Context.PageMap.get(/*Region=*/0U, Page), 1U);
+        }
+      }
+
+      const scudo::uptr FirstUncountedPage =
+          scudo::roundUp(Block + BlockSize, PageSize);
+      for (scudo::uptr Page = FirstUncountedPage;
+           Page <= RoundedRegionSize / PageSize; ++Page) {
+        EXPECT_EQ(Context.PageMap.get(/*Region=*/0U, Page), 0U);
+      }
+    } // Iterate each Group
+
+    // Release the entire region. This is to ensure the last page is counted.
+    scudo::PageReleaseContext Context(BlockSize, RegionSize,
+                                      /*NumberOfRegions=*/1U);
+    Context.markRangeAsAllCounted(/*From=*/0U, /*To=*/RegionSize, /*Base=*/0);
+    for (scudo::uptr Page = 0; Page < RoundedRegionSize / PageSize; ++Page)
+      EXPECT_TRUE(Context.PageMap.isAllCounted(/*Region=*/0, Page));
+  } // Iterate each size class
+}
+
 TEST(ScudoReleaseTest, ReleaseFreeMemoryToOSDefault) {
   testReleaseFreeMemoryToOS<scudo::DefaultSizeClassMap>();
 }
@@ -276,4 +411,11 @@ TEST(ScudoReleaseTest, ReleaseFreeMemoryToOSAndroid) {
 
 TEST(ScudoReleaseTest, ReleaseFreeMemoryToOSSvelte) {
   testReleaseFreeMemoryToOS<scudo::SvelteSizeClassMap>();
+}
+
+TEST(ScudoReleaseTest, PageMapMarkRange) {
+  testPageMapMarkRange<scudo::DefaultSizeClassMap>();
+  testPageMapMarkRange<scudo::AndroidSizeClassMap>();
+  testPageMapMarkRange<scudo::FuchsiaSizeClassMap>();
+  testPageMapMarkRange<scudo::SvelteSizeClassMap>();
 }

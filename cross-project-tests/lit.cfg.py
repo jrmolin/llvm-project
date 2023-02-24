@@ -22,7 +22,7 @@ config.name = 'cross-project-tests'
 config.test_format = lit.formats.ShTest(not llvm_config.use_lit_shell)
 
 # suffixes: A list of file extensions to treat as test files.
-config.suffixes = ['.c', '.cpp', '.m']
+config.suffixes = ['.c', '.cl', '.cpp', '.m']
 
 # excludes: A list of directories to exclude from the testsuite. The 'Inputs'
 # subdirectories contain auxiliary inputs for various tests in their parent
@@ -82,11 +82,6 @@ llvm_config.use_lld(required=('lld' in config.llvm_enabled_projects))
 
 if 'compiler-rt' in config.llvm_enabled_projects:
   config.available_features.add('compiler-rt')
-
-if config.llvm_use_sanitizer:
-    # Propagate path to symbolizer for ASan/MSan.
-    llvm_config.with_system_environment(
-        ['ASAN_SYMBOLIZER_PATH', 'MSAN_SYMBOLIZER_PATH'])
 
 # Check which debuggers are available:
 lldb_path = llvm_config.use_llvm_tool('lldb', search_env='LLDB')

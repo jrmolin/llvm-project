@@ -18,7 +18,6 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/Triple.h"
 #include "llvm/CodeGen/CallingConvLower.h"
 #include "llvm/CodeGen/ISDOpcodes.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
@@ -42,6 +41,7 @@
 #include "llvm/Support/MachineValueType.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/TargetParser/Triple.h"
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -415,7 +415,7 @@ SDValue MipsSETargetLowering::lowerSELECT(SDValue Op, SelectionDAG &DAG) const {
 }
 
 bool MipsSETargetLowering::allowsMisalignedMemoryAccesses(
-    EVT VT, unsigned, Align, MachineMemOperand::Flags, bool *Fast) const {
+    EVT VT, unsigned, Align, MachineMemOperand::Flags, unsigned *Fast) const {
   MVT::SimpleValueType SVT = VT.getSimpleVT().SimpleTy;
 
   if (Subtarget.systemSupportsUnalignedAccess()) {
@@ -424,7 +424,7 @@ bool MipsSETargetLowering::allowsMisalignedMemoryAccesses(
     // a hybrid of the two but it's expected that most implementations will
     // handle the majority of cases in hardware.
     if (Fast)
-      *Fast = true;
+      *Fast = 1;
     return true;
   }
 
@@ -432,7 +432,7 @@ bool MipsSETargetLowering::allowsMisalignedMemoryAccesses(
   case MVT::i64:
   case MVT::i32:
     if (Fast)
-      *Fast = true;
+      *Fast = 1;
     return true;
   default:
     return false;
@@ -508,7 +508,7 @@ static SDValue performANDCombine(SDNode *N, SelectionDAG &DAG,
       SDValue Ops[] = { Op0->getOperand(0), Op0->getOperand(1), Op0Op2 };
       return DAG.getNode(MipsISD::VEXTRACT_ZEXT_ELT, SDLoc(Op0),
                          Op0->getVTList(),
-                         makeArrayRef(Ops, Op0->getNumOperands()));
+                         ArrayRef(Ops, Op0->getNumOperands()));
     }
   }
 
@@ -917,7 +917,7 @@ static SDValue performSRACombine(SDNode *N, SelectionDAG &DAG,
                           Op0Op0->getOperand(2) };
         return DAG.getNode(MipsISD::VEXTRACT_SEXT_ELT, SDLoc(Op0Op0),
                            Op0Op0->getVTList(),
-                           makeArrayRef(Ops, Op0Op0->getNumOperands()));
+                           ArrayRef(Ops, Op0Op0->getNumOperands()));
       }
     }
   }
@@ -1177,13 +1177,13 @@ SDValue MipsSETargetLowering::lowerLOAD(SDValue Op, SelectionDAG &DAG) const {
 
   // i32 load from lower address.
   SDValue Lo = DAG.getLoad(MVT::i32, DL, Chain, Ptr, MachinePointerInfo(),
-                           Nd.getAlignment(), Nd.getMemOperand()->getFlags());
+                           Nd.getAlign(), Nd.getMemOperand()->getFlags());
 
   // i32 load from higher address.
   Ptr = DAG.getNode(ISD::ADD, DL, PtrVT, Ptr, DAG.getConstant(4, DL, PtrVT));
   SDValue Hi = DAG.getLoad(
       MVT::i32, DL, Lo.getValue(1), Ptr, MachinePointerInfo(),
-      std::min(Nd.getAlignment(), 4U), Nd.getMemOperand()->getFlags());
+      commonAlignment(Nd.getAlign(), 4), Nd.getMemOperand()->getFlags());
 
   if (!Subtarget.isLittle())
     std::swap(Lo, Hi);
@@ -1212,14 +1212,13 @@ SDValue MipsSETargetLowering::lowerSTORE(SDValue Op, SelectionDAG &DAG) const {
     std::swap(Lo, Hi);
 
   // i32 store to lower address.
-  Chain =
-      DAG.getStore(Chain, DL, Lo, Ptr, MachinePointerInfo(), Nd.getAlignment(),
-                   Nd.getMemOperand()->getFlags(), Nd.getAAInfo());
+  Chain = DAG.getStore(Chain, DL, Lo, Ptr, MachinePointerInfo(), Nd.getAlign(),
+                       Nd.getMemOperand()->getFlags(), Nd.getAAInfo());
 
   // i32 store to higher address.
   Ptr = DAG.getNode(ISD::ADD, DL, PtrVT, Ptr, DAG.getConstant(4, DL, PtrVT));
   return DAG.getStore(Chain, DL, Hi, Ptr, MachinePointerInfo(),
-                      std::min(Nd.getAlignment(), 4U),
+                      commonAlignment(Nd.getAlign(), 4),
                       Nd.getMemOperand()->getFlags(), Nd.getAAInfo());
 }
 
@@ -1397,7 +1396,7 @@ static SDValue lowerMSASplatZExt(SDValue Op, unsigned OpNr, SelectionDAG &DAG) {
                       LaneA, LaneB, LaneA, LaneB, LaneA, LaneB, LaneA, LaneB };
 
   SDValue Result = DAG.getBuildVector(
-      ViaVecTy, DL, makeArrayRef(Ops, ViaVecTy.getVectorNumElements()));
+      ViaVecTy, DL, ArrayRef(Ops, ViaVecTy.getVectorNumElements()));
 
   if (ViaVecTy != ResVecTy) {
     SDValue One = DAG.getConstant(1, DL, ViaVecTy);
@@ -1445,7 +1444,7 @@ static SDValue getBuildVectorSplat(EVT VecTy, SDValue SplatValue,
                       SplatValueA, SplatValueB, SplatValueA, SplatValueB };
 
   SDValue Result = DAG.getBuildVector(
-      ViaVecTy, DL, makeArrayRef(Ops, ViaVecTy.getVectorNumElements()));
+      ViaVecTy, DL, ArrayRef(Ops, ViaVecTy.getVectorNumElements()));
 
   if (VecTy != ViaVecTy)
     Result = DAG.getNode(ISD::BITCAST, DL, VecTy, Result);

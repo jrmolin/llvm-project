@@ -22,6 +22,7 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBufferRef.h"
 #include "llvm/Support/Path.h"
+#include <optional>
 
 using namespace clang;
 
@@ -75,7 +76,7 @@ bool Preprocessor::EnterSourceFile(FileID FID, ConstSearchDirIterator CurDir,
     MaxIncludeStackDepth = IncludeMacroStack.size();
 
   // Get the MemoryBuffer for this FID, if it fails, we fail.
-  llvm::Optional<llvm::MemoryBufferRef> InputFile =
+  std::optional<llvm::MemoryBufferRef> InputFile =
       getSourceManager().getBufferOrNone(FID, Loc);
   if (!InputFile) {
     SourceLocation FileStart = SourceMgr.getLocForStartOfFile(FID);
@@ -91,8 +92,19 @@ bool Preprocessor::EnterSourceFile(FileID FID, ConstSearchDirIterator CurDir,
         CodeCompletionFileLoc.getLocWithOffset(CodeCompletionOffset);
   }
 
-  EnterSourceFileWithLexer(
-      new Lexer(FID, *InputFile, *this, IsFirstIncludeOfFile), CurDir);
+  Lexer *TheLexer = new Lexer(FID, *InputFile, *this, IsFirstIncludeOfFile);
+  if (getPreprocessorOpts().DependencyDirectivesForFile &&
+      FID != PredefinesFileID) {
+    if (OptionalFileEntryRef File = SourceMgr.getFileEntryRefForID(FID)) {
+      if (std::optional<ArrayRef<dependency_directives_scan::Directive>>
+              DepDirectives =
+                  getPreprocessorOpts().DependencyDirectivesForFile(*File)) {
+        TheLexer->DepDirectives = *DepDirectives;
+      }
+    }
+  }
+
+  EnterSourceFileWithLexer(TheLexer, CurDir);
   return false;
 }
 
@@ -100,6 +112,7 @@ bool Preprocessor::EnterSourceFile(FileID FID, ConstSearchDirIterator CurDir,
 ///  and start lexing tokens from it instead of the current buffer.
 void Preprocessor::EnterSourceFileWithLexer(Lexer *TheLexer,
                                             ConstSearchDirIterator CurDir) {
+  PreprocessorLexer *PrevPPLexer = CurPPLexer;
 
   // Add the current lexer to the include stack.
   if (CurPPLexer || CurTokenLexer)
@@ -110,15 +123,26 @@ void Preprocessor::EnterSourceFileWithLexer(Lexer *TheLexer,
   CurDirLookup = CurDir;
   CurLexerSubmodule = nullptr;
   if (CurLexerKind != CLK_LexAfterModuleImport)
-    CurLexerKind = CLK_Lexer;
+    CurLexerKind = TheLexer->isDependencyDirectivesLexer()
+                       ? CLK_DependencyDirectivesLexer
+                       : CLK_Lexer;
 
   // Notify the client, if desired, that we are in a new source file.
   if (Callbacks && !CurLexer->Is_PragmaLexer) {
     SrcMgr::CharacteristicKind FileType =
        SourceMgr.getFileCharacteristic(CurLexer->getFileLoc());
 
-    Callbacks->FileChanged(CurLexer->getFileLoc(),
-                           PPCallbacks::EnterFile, FileType);
+    FileID PrevFID;
+    SourceLocation EnterLoc;
+    if (PrevPPLexer) {
+      PrevFID = PrevPPLexer->getFileID();
+      EnterLoc = PrevPPLexer->getSourceLocation();
+    }
+    Callbacks->FileChanged(CurLexer->getFileLoc(), PPCallbacks::EnterFile,
+                           FileType, PrevFID);
+    Callbacks->LexedFileChanged(CurLexer->getFileID(),
+                                PPCallbacks::LexedFileChangeReason::EnterFile,
+                                FileType, PrevFID, EnterLoc);
   }
 }
 
@@ -309,6 +333,15 @@ bool Preprocessor::HandleEndOfFile(Token &Result, bool isEndOfMacro) {
   assert(!CurTokenLexer &&
          "Ending a file when currently in a macro!");
 
+  SourceLocation UnclosedSafeBufferOptOutLoc;
+
+  if (IncludeMacroStack.empty() &&
+      isPPInSafeBufferOptOutRegion(UnclosedSafeBufferOptOutLoc)) {
+    // To warn if a "-Wunsafe-buffer-usage" opt-out region is still open by the
+    // end of a file.
+    Diag(UnclosedSafeBufferOptOutLoc,
+         diag::err_pp_unclosed_pragma_unsafe_buffer_usage);
+  }
   // If we have an unclosed module region from a pragma at the end of a
   // module, complain and close it now.
   const bool LeavingSubmodule = CurLexer && CurLexerSubmodule;
@@ -473,10 +506,13 @@ bool Preprocessor::HandleEndOfFile(Token &Result, bool isEndOfMacro) {
 
     // Notify the client, if desired, that we are in a new source file.
     if (Callbacks && !isEndOfMacro && CurPPLexer) {
+      SourceLocation Loc = CurPPLexer->getSourceLocation();
       SrcMgr::CharacteristicKind FileType =
-        SourceMgr.getFileCharacteristic(CurPPLexer->getSourceLocation());
-      Callbacks->FileChanged(CurPPLexer->getSourceLocation(),
-                             PPCallbacks::ExitFile, FileType, ExitedFID);
+          SourceMgr.getFileCharacteristic(Loc);
+      Callbacks->FileChanged(Loc, PPCallbacks::ExitFile, FileType, ExitedFID);
+      Callbacks->LexedFileChanged(CurPPLexer->getFileID(),
+                                  PPCallbacks::LexedFileChangeReason::ExitFile,
+                                  FileType, ExitedFID, Loc);
     }
 
     // Restore conditional stack as well as the recorded

@@ -10,14 +10,18 @@
 #define LLVM_CLANG_DRIVER_DRIVER_H
 
 #include "clang/Basic/Diagnostic.h"
+#include "clang/Basic/HeaderInclude.h"
 #include "clang/Basic/LLVM.h"
 #include "clang/Driver/Action.h"
+#include "clang/Driver/DriverDiagnostic.h"
 #include "clang/Driver/InputInfo.h"
 #include "clang/Driver/Options.h"
 #include "clang/Driver/Phases.h"
 #include "clang/Driver/ToolChain.h"
 #include "clang/Driver/Types.h"
 #include "clang/Driver/Util.h"
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Option/Arg.h"
@@ -27,11 +31,15 @@
 #include <list>
 #include <map>
 #include <string>
+#include <vector>
 
 namespace llvm {
 class Triple;
 namespace vfs {
 class FileSystem;
+}
+namespace cl {
+class ExpansionContext;
 }
 } // namespace llvm
 
@@ -43,9 +51,7 @@ typedef SmallVector<InputInfo, 4> InputInfoList;
 
 class Command;
 class Compilation;
-class JobList;
 class JobAction;
-class SanitizerArgs;
 class ToolChain;
 
 /// Describes the kind of LTO mode selected via -f(no-)?lto(=.*)? options.
@@ -93,6 +99,12 @@ class Driver {
     EmbedMarker,
     EmbedBitcode
   } BitcodeEmbed;
+
+  enum OffloadMode {
+    OffloadHostDevice,
+    OffloadHost,
+    OffloadDevice,
+  } Offload;
 
   /// Header unit mode set by -fmodule-header={user,system}.
   ModuleHeaderMode CXX20HeaderType;
@@ -223,9 +235,16 @@ public:
   /// CCPrintOptionsFilename or to stderr.
   unsigned CCPrintOptions : 1;
 
-  /// Set CC_PRINT_HEADERS mode, which causes the frontend to log header include
-  /// information to CCPrintHeadersFilename or to stderr.
-  unsigned CCPrintHeaders : 1;
+  /// The format of the header information that is emitted. If CC_PRINT_HEADERS
+  /// is set, the format is textual. Otherwise, the format is determined by the
+  /// enviroment variable CC_PRINT_HEADERS_FORMAT.
+  HeaderIncludeFormatKind CCPrintHeadersFormat = HIFMT_None;
+
+  /// This flag determines whether clang should filter the header information
+  /// that is emitted. If enviroment variable CC_PRINT_HEADERS_FILTERING is set
+  /// to "only-direct-system", only system headers that are directly included
+  /// from non-system headers are emitted.
+  HeaderIncludeFilteringKind CCPrintHeadersFiltering = HIFIL_None;
 
   /// Set CC_LOG_DIAGNOSTICS mode, which causes the frontend to log diagnostics
   /// to CCLogDiagnosticsFilename or to stderr, in a stable machine readable
@@ -243,7 +262,8 @@ public:
   /// When the clangDriver lib is used through clang.exe, this provides a
   /// shortcut for executing the -cc1 command-line directly, in the same
   /// process.
-  typedef int (*CC1ToolFunc)(SmallVectorImpl<const char *> &ArgV);
+  using CC1ToolFunc =
+      llvm::function_ref<int(SmallVectorImpl<const char *> &ArgV)>;
   CC1ToolFunc CC1Main = nullptr;
 
 private:
@@ -253,8 +273,8 @@ private:
   /// Name to use when invoking gcc/g++.
   std::string CCCGenericGCCName;
 
-  /// Name of configuration file if used.
-  std::string ConfigFile;
+  /// Paths to configuration files used.
+  std::vector<std::string> ConfigFiles;
 
   /// Allocator for string saver.
   llvm::BumpPtrAllocator Alloc;
@@ -268,6 +288,12 @@ private:
   /// Arguments originated from command line.
   std::unique_ptr<llvm::opt::InputArgList> CLOptions;
 
+  /// If this is non-null, the driver will prepend this argument before
+  /// reinvoking clang. This is useful for the llvm-driver where clang's
+  /// realpath will be to the llvm binary and not clang, so it must pass
+  /// "clang" as it's first argument.
+  const char *PrependArg;
+
   /// Whether to check that input files exist when constructing compilation
   /// jobs.
   unsigned CheckInputsExist : 1;
@@ -276,11 +302,6 @@ private:
   unsigned ProbePrecompiled : 1;
 
 public:
-  /// Force clang to emit reproducer for driver invocation. This is enabled
-  /// indirectly by setting FORCE_CLANG_DIAGNOSTICS_CRASH environment variable
-  /// or when using the -gen-reproducer driver flag.
-  unsigned GenReproducer : 1;
-
   // getFinalPhase - Determine which compilation mode we are in and record
   // which option we used to determine the final phase.
   // TODO: Much of what getFinalPhase returns are not actually true compiler
@@ -299,6 +320,11 @@ private:
   /// created targeting that triple. The driver owns all the ToolChain objects
   /// stored in it, and will clean them up when torn down.
   mutable llvm::StringMap<std::unique_ptr<ToolChain>> ToolChains;
+
+  /// Cache of known offloading architectures for the ToolChain already derived.
+  /// This should only be modified when we first initialize the offloading
+  /// toolchains.
+  llvm::DenseMap<const ToolChain *, llvm::DenseSet<llvm::StringRef>> KnownArchs;
 
 private:
   /// TranslateInputArgs - Create a new derived argument list from the input
@@ -348,7 +374,9 @@ public:
   /// Name to use when invoking gcc/g++.
   const std::string &getCCCGenericGCCName() const { return CCCGenericGCCName; }
 
-  const std::string &getConfigFile() const { return ConfigFile; }
+  llvm::ArrayRef<std::string> getConfigFiles() const {
+    return ConfigFiles;
+  }
 
   const llvm::opt::OptTable &getOpts() const { return getDriverOptTable(); }
 
@@ -362,6 +390,9 @@ public:
 
   bool getProbePrecompiled() const { return ProbePrecompiled; }
   void setProbePrecompiled(bool Value) { ProbePrecompiled = Value; }
+
+  const char *getPrependArg() const { return PrependArg; }
+  void setPrependArg(const char *Value) { PrependArg = Value; }
 
   void setTargetAndMode(const ParsedClangName &TM) { ClangNameParts = TM; }
 
@@ -389,6 +420,9 @@ public:
   bool embedBitcodeEnabled() const { return BitcodeEmbed != EmbedNone; }
   bool embedBitcodeInObject() const { return (BitcodeEmbed == EmbedBitcode); }
   bool embedBitcodeMarkerOnly() const { return (BitcodeEmbed == EmbedMarker); }
+
+  bool offloadHostOnly() const { return Offload == OffloadHost; }
+  bool offloadDeviceOnly() const { return Offload == OffloadDevice; }
 
   /// Compute the desired OpenMP runtime from the flags provided.
   OpenMPRuntimeKind getOpenMPRuntime(const llvm::opt::ArgList &Args) const;
@@ -456,6 +490,14 @@ public:
                                  const InputTy &Input,
                                  Action *HostAction) const;
 
+  /// Returns the set of bound architectures active for this offload kind.
+  /// If there are no bound architctures we return a set containing only the
+  /// empty string. The \p SuppressError option is used to suppress errors.
+  llvm::DenseSet<StringRef>
+  getOffloadArchs(Compilation &C, const llvm::opt::DerivedArgList &Args,
+                  Action::OffloadKind Kind, const ToolChain *TC,
+                  bool SuppressError = false) const;
+
   /// Check that the file referenced by Value exists. If it doesn't,
   /// issue a diagnostic and return false.
   /// If TypoCorrect is true and the file does not exist, see if it looks
@@ -492,6 +534,35 @@ public:
       Compilation &C, const Command &FailingCommand,
       StringRef AdditionalInformation = "",
       CompilationDiagnosticReport *GeneratedReport = nullptr);
+
+  enum class CommandStatus {
+    Crash = 1,
+    Error,
+    Ok,
+  };
+
+  enum class ReproLevel {
+    Off = 0,
+    OnCrash = static_cast<int>(CommandStatus::Crash),
+    OnError = static_cast<int>(CommandStatus::Error),
+    Always = static_cast<int>(CommandStatus::Ok),
+  };
+
+  bool maybeGenerateCompilationDiagnostics(
+      CommandStatus CS, ReproLevel Level, Compilation &C,
+      const Command &FailingCommand, StringRef AdditionalInformation = "",
+      CompilationDiagnosticReport *GeneratedReport = nullptr) {
+    if (static_cast<int>(CS) > static_cast<int>(Level))
+      return false;
+    if (CS != CommandStatus::Crash)
+      Diags.Report(diag::err_drv_force_crash)
+          << !::getenv("FORCE_CLANG_DIAGNOSTICS_CRASH");
+    // Hack to ensure that diagnostic notes get emitted.
+    Diags.setLastDiagnosticIgnored(false);
+    generateCompilationDiagnostics(C, FailingCommand, AdditionalInformation,
+                                   GeneratedReport);
+    return true;
+  }
 
   /// @}
   /// @name Helper Methods
@@ -556,6 +627,11 @@ public:
   /// Returns the default name for linked images (e.g., "a.out").
   const char *getDefaultImageName() const;
 
+  // Creates a temp file with $Prefix-%%%%%%.$Suffix
+  const char *CreateTempFile(Compilation &C, StringRef Prefix, StringRef Suffix,
+                             bool MultipleArchs = false,
+                             StringRef BoundArch = {}) const;
+
   /// GetNamedOutputPath - Return the name to use for the output of
   /// the action \p JA. The result is appended to the compilation's
   /// list of temporary or result files, as appropriate.
@@ -615,16 +691,23 @@ public:
 
 private:
 
-  /// Tries to load options from configuration file.
+  /// Tries to load options from configuration files.
   ///
   /// \returns true if error occurred.
-  bool loadConfigFile();
+  bool loadConfigFiles();
+
+  /// Tries to load options from default configuration files (deduced from
+  /// executable filename).
+  ///
+  /// \returns true if error occurred.
+  bool loadDefaultConfigFiles(llvm::cl::ExpansionContext &ExpCtx);
 
   /// Read options from the specified file.
   ///
   /// \param [in] FileName File to read.
+  /// \param [in] Search and expansion options.
   /// \returns true, if error occurred while reading.
-  bool readConfigFile(StringRef FileName);
+  bool readConfigFile(StringRef FileName, llvm::cl::ExpansionContext &ExpCtx);
 
   /// Set the driver mode (cl, gcc, etc) from the value of the `--driver-mode`
   /// option.
@@ -671,6 +754,9 @@ private:
       std::map<std::pair<const Action *, std::string>, InputInfoList>
           &CachedResults,
       Action::OffloadKind TargetDeviceOffloadKind) const;
+
+  /// Return the typical executable name for the specified driver \p Mode.
+  static const char *getExecutableForDriverMode(DriverMode Mode);
 
 public:
   /// GetReleaseVersion - Parse (([0-9]+)(.([0-9]+)(.([0-9]+)?))?)? and

@@ -14,15 +14,17 @@
 #define MLIR_DIALECT_TOSA_IR_TOSAOPS_H
 
 #include "mlir/Dialect/Traits.h"
+#include "mlir/IR/OpImplementation.h"
 #include "mlir/Interfaces/InferTypeOpInterface.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/Interfaces/VectorInterfaces.h"
 
 //===----------------------------------------------------------------------===//
 // TOSA dialect and structs includes.
 //===----------------------------------------------------------------------===//
+
 #include "mlir/Dialect/Tosa/IR/TosaOpsDialect.h.inc"
-#include "mlir/Dialect/Tosa/IR/TosaStructs.h.inc"
 
 namespace mlir {
 class PatternRewriter;
@@ -33,6 +35,9 @@ namespace tosa {
 
 } // namespace tosa
 } // namespace mlir
+
+#define GET_ATTRDEF_CLASSES
+#include "mlir/Dialect/Tosa/IR/TosaAttributes.h.inc"
 
 #define GET_OP_CLASSES
 #include "mlir/Dialect/Tosa/IR/TosaOps.h.inc"

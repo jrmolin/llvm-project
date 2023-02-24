@@ -19,10 +19,13 @@ namespace Fortran::runtime::io {
 template <int LOG2_BASE>
 static bool EditBOZInput(
     IoStatementState &io, const DataEdit &edit, void *n, std::size_t bytes) {
-  std::optional<int> remaining;
-  std::optional<char32_t> next{io.PrepareInput(edit, remaining)};
-  if (*next == '0') {
+  // Skip leading white space & zeroes
+  std::optional<int> remaining{io.CueUpInput(edit)};
+  auto start{io.GetConnectionState().positionInRecord};
+  std::optional<char32_t> next{io.NextInField(remaining, edit)};
+  if (next.value_or('?') == '0') {
     do {
+      start = io.GetConnectionState().positionInRecord;
       next = io.NextInField(remaining, edit);
     } while (next && *next == '0');
   }
@@ -47,12 +50,12 @@ static bool EditBOZInput(
   }
   auto significantBytes{static_cast<std::size_t>(digits * LOG2_BASE + 7) / 8};
   if (significantBytes > bytes) {
-    io.GetIoErrorHandler().SignalError(
+    io.GetIoErrorHandler().SignalError(IostatBOZInputOverflow,
         "B/O/Z input of %d digits overflows %zd-byte variable", digits, bytes);
     return false;
   }
   // Reset to start of significant digits
-  io.HandleRelativePosition(-digits);
+  io.HandleAbsolutePosition(start);
   remaining.reset();
   // Make a second pass now that the digit count is known
   std::memset(n, 0, bytes);
@@ -97,7 +100,8 @@ static inline char32_t GetDecimalPoint(const DataEdit &edit) {
 // Returns true if there's a '-' sign.
 static bool ScanNumericPrefix(IoStatementState &io, const DataEdit &edit,
     std::optional<char32_t> &next, std::optional<int> &remaining) {
-  next = io.PrepareInput(edit, remaining);
+  remaining = io.CueUpInput(edit);
+  next = io.NextInField(remaining, edit);
   bool negative{false};
   if (next) {
     negative = *next == '-';
@@ -114,7 +118,7 @@ bool EditIntegerInput(
   RUNTIME_CHECK(io.GetIoErrorHandler(), kind >= 1 && !(kind & (kind - 1)));
   switch (edit.descriptor) {
   case DataEdit::ListDirected:
-    if (IsNamelistName(io)) {
+    if (IsNamelistNameOrSlash(io)) {
       return false;
     }
     break;
@@ -140,6 +144,7 @@ bool EditIntegerInput(
   bool negate{ScanNumericPrefix(io, edit, next, remaining)};
   common::UnsignedInt128 value{0};
   bool any{negate};
+  bool overflow{false};
   for (; next; next = io.NextInField(remaining, edit)) {
     char32_t ch{*next};
     if (ch == ' ' || ch == '\t') {
@@ -157,9 +162,27 @@ bool EditIntegerInput(
           "Bad character '%lc' in INTEGER input field", ch);
       return false;
     }
+    static constexpr auto maxu128{~common::UnsignedInt128{0}};
+    static constexpr auto maxu128OverTen{maxu128 / 10};
+    static constexpr int maxLastDigit{
+        static_cast<int>(maxu128 - (maxu128OverTen * 10))};
+    overflow |= value >= maxu128OverTen &&
+        (value > maxu128OverTen || digit > maxLastDigit);
     value *= 10;
     value += digit;
     any = true;
+  }
+  if (!any && !remaining) {
+    io.GetIoErrorHandler().SignalError(
+        "Integer value absent from NAMELIST or list-directed input");
+    return false;
+  }
+  auto maxForKind{common::UnsignedInt128{1} << ((8 * kind) - 1)};
+  overflow |= value >= maxForKind && (value > maxForKind || !negate);
+  if (overflow) {
+    io.GetIoErrorHandler().SignalError(IostatIntegerInputOverflow,
+        "Decimal input overflows INTEGER(%d) variable", kind);
+    return false;
   }
   if (negate) {
     value = -value;
@@ -217,17 +240,19 @@ static int ScanRealInput(char *buffer, int bufferSize, IoStatementState &io,
     if (next && *next == '(') { // NaN(...)
       Put('(');
       int depth{1};
-      do {
+      while (true) {
         next = io.NextInField(remaining, edit);
-        if (!next) {
+        if (depth == 0) {
           break;
+        } else if (!next) {
+          return 0; // error
         } else if (*next == '(') {
           ++depth;
         } else if (*next == ')') {
           --depth;
         }
         Put(*next);
-      } while (depth > 0);
+      }
     }
     exponent = 0;
   } else if (first == decimal || (first >= '0' && first <= '9') ||
@@ -281,7 +306,9 @@ static int ScanRealInput(char *buffer, int bufferSize, IoStatementState &io,
       }
       for (exponent = 0; next; next = io.NextInField(remaining, edit)) {
         if (*next >= '0' && *next <= '9') {
-          exponent = 10 * exponent + *next - '0';
+          if (exponent < 10000) {
+            exponent = 10 * exponent + *next - '0';
+          }
         } else if (*next == ' ' || *next == '\t') {
           if (bzMode) {
             exponent = 10 * exponent;
@@ -364,10 +391,13 @@ static bool TryFastPathRealInput(
   if (edit.modes.scale != 0) {
     return false;
   }
+  const ConnectionState &connection{io.GetConnectionState()};
+  if (connection.internalIoCharKind > 1) {
+    return false; // reading non-default character
+  }
   const char *str{nullptr};
   std::size_t got{io.GetNextInputBytes(str)};
-  if (got == 0 || str == nullptr ||
-      !io.GetConnectionState().recordLength.has_value()) {
+  if (got == 0 || str == nullptr || !connection.recordLength.has_value()) {
     return false; // could not access reliably-terminated input stream
   }
   const char *p{str};
@@ -376,7 +406,7 @@ static bool TryFastPathRealInput(
   const char *limit{str + maxConsume};
   decimal::ConversionToBinaryResult<PRECISION> converted{
       decimal::ConvertToBinary<PRECISION>(p, edit.modes.round, limit)};
-  if (converted.flags & decimal::Invalid) {
+  if (converted.flags & (decimal::Invalid | decimal::Overflow)) {
     return false;
   }
   if (edit.digits.value_or(0) != 0) {
@@ -489,6 +519,10 @@ bool EditCommonRealInput(IoStatementState &io, const DataEdit &edit, void *n) {
       converted.binary;
   // Set FP exception flags
   if (converted.flags != decimal::ConversionResultFlags::Exact) {
+    if (converted.flags & decimal::ConversionResultFlags::Overflow) {
+      io.GetIoErrorHandler().SignalError(IostatRealInputOverflow);
+      return false;
+    }
     RaiseFPExceptions(converted.flags);
   }
   return true;
@@ -498,7 +532,7 @@ template <int KIND>
 bool EditRealInput(IoStatementState &io, const DataEdit &edit, void *n) {
   switch (edit.descriptor) {
   case DataEdit::ListDirected:
-    if (IsNamelistName(io)) {
+    if (IsNamelistNameOrSlash(io)) {
       return false;
     }
     return EditCommonRealInput<KIND>(io, edit, n);
@@ -532,7 +566,7 @@ bool EditRealInput(IoStatementState &io, const DataEdit &edit, void *n) {
 bool EditLogicalInput(IoStatementState &io, const DataEdit &edit, bool &x) {
   switch (edit.descriptor) {
   case DataEdit::ListDirected:
-    if (IsNamelistName(io)) {
+    if (IsNamelistNameOrSlash(io)) {
       return false;
     }
     break;
@@ -545,8 +579,8 @@ bool EditLogicalInput(IoStatementState &io, const DataEdit &edit, bool &x) {
         edit.descriptor);
     return false;
   }
-  std::optional<int> remaining;
-  std::optional<char32_t> next{io.PrepareInput(edit, remaining)};
+  std::optional<int> remaining{io.CueUpInput(edit)};
+  std::optional<char32_t> next{io.NextInField(remaining, edit)};
   if (next && *next == '.') { // skip optional period
     next = io.NextInField(remaining, edit);
   }
@@ -621,7 +655,7 @@ static bool EditListDirectedCharacterInput(
     io.HandleRelativePosition(byteCount);
     return EditDelimitedCharacterInput(io, x, length, *ch);
   }
-  if (IsNamelistName(io) || io.GetConnectionState().IsAtEOF()) {
+  if (IsNamelistNameOrSlash(io) || io.GetConnectionState().IsAtEOF()) {
     return false;
   }
   // Undelimited list-directed character input: stop at a value separator
@@ -630,15 +664,25 @@ static bool EditListDirectedCharacterInput(
   // in NextInField.
   std::optional<int> remaining{length > 0 ? maxUTF8Bytes : 0};
   while (std::optional<char32_t> next{io.NextInField(remaining, edit)}) {
+    bool isSep{false};
     switch (*next) {
     case ' ':
     case '\t':
-    case ',':
-    case ';':
     case '/':
-      remaining = 0; // value separator: stop
+      isSep = true;
+      break;
+    case ',':
+      isSep = !(edit.modes.editingFlags & decimalComma);
+      break;
+    case ';':
+      isSep = !!(edit.modes.editingFlags & decimalComma);
       break;
     default:
+      break;
+    }
+    if (isSep) {
+      remaining = 0;
+    } else {
       *x++ = *next;
       remaining = --length > 0 ? maxUTF8Bytes : 0;
     }
@@ -669,19 +713,15 @@ bool EditCharacterInput(
     return false;
   }
   const ConnectionState &connection{io.GetConnectionState()};
-  if (connection.IsAtEOF()) {
-    return false;
-  }
   std::size_t remaining{length};
   if (edit.width && *edit.width > 0) {
     remaining = *edit.width;
   }
   // When the field is wider than the variable, we drop the leading
-  // characters.  When the variable is wider than the field, there's
+  // characters.  When the variable is wider than the field, there can be
   // trailing padding.
   const char *input{nullptr};
   std::size_t ready{0};
-  bool hitEnd{false};
   // Skip leading bytes.
   // These bytes don't count towards INQUIRE(IOLENGTH=).
   std::size_t skip{remaining > length ? remaining - length : 0};
@@ -690,8 +730,10 @@ bool EditCharacterInput(
     if (ready == 0) {
       ready = io.GetNextInputBytes(input);
       if (ready == 0) {
-        hitEnd = true;
-        break;
+        if (io.CheckForEndOfRecord()) {
+          std::fill_n(x, length, ' '); // PAD='YES'
+        }
+        return !io.GetIoErrorHandler().InError();
       }
     }
     std::size_t chunk;
@@ -708,7 +750,29 @@ bool EditCharacterInput(
         chunk = 1;
       }
       --remaining;
-    } else {
+    } else if (connection.internalIoCharKind > 1) {
+      // Reading from non-default character internal unit
+      chunk = connection.internalIoCharKind;
+      if (skipping) {
+        --skip;
+      } else {
+        char32_t buffer{0};
+        std::memcpy(&buffer, input, chunk);
+        *x++ = buffer;
+        --length;
+      }
+      --remaining;
+    } else if constexpr (sizeof *x > 1) {
+      // Read single byte with expansion into multi-byte CHARACTER
+      chunk = 1;
+      if (skipping) {
+        --skip;
+      } else {
+        *x++ = static_cast<unsigned char>(*input);
+        --length;
+      }
+      --remaining;
+    } else { // single bytes -> default CHARACTER
       if (skipping) {
         chunk = std::min<std::size_t>(skip, ready);
         skip -= chunk;
@@ -729,9 +793,6 @@ bool EditCharacterInput(
   }
   // Pad the remainder of the input variable, if any.
   std::fill_n(x, length, ' ');
-  if (hitEnd) {
-    io.CheckForEndOfRecord(); // signal any needed error
-  }
   return true;
 }
 

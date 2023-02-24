@@ -40,15 +40,17 @@ Using Clang as a Compiler
    SafeStack
    ShadowCallStack
    SourceBasedCodeCoverage
+   StandardCPlusPlusModules
    Modules
    MSVCCompatibility
    MisExpect
    OpenCLSupport
    OpenMPSupport
    SYCLSupport
-   HLSLSupport
+   HLSL/HLSLDocs
    ThinLTO
    APINotes
+   DebuggingCoroutines
    CommandGuide/index
    FAQ
 
@@ -85,9 +87,9 @@ Using Clang Tools
    ClangFormatStyleOptions
    ClangFormattedStatus
    ClangLinkerWrapper
-   ClangNvlinkWrapper
    ClangOffloadBundler
-   ClangOffloadWrapper
+   ClangOffloadPackager
+   ClangRepl
 
 Design Documents
 ================
@@ -95,6 +97,7 @@ Design Documents
 .. toctree::
    :maxdepth: 1
 
+   CodeOwners
    InternalsManual
    DriverInternals
    OffloadingDesign
@@ -108,6 +111,5 @@ Indices and tables
 ==================
 
 * :ref:`genindex`
-* :ref:`modindex`
 * :ref:`search`
 

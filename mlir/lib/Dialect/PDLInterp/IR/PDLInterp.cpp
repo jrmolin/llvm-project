@@ -71,7 +71,7 @@ static ParseResult parseCreateOperationOpAttributes(
   Builder &builder = p.getBuilder();
   SmallVector<Attribute, 4> attrNames;
   if (succeeded(p.parseOptionalLBrace())) {
-    do {
+    auto parseOperands = [&]() {
       StringAttr nameAttr;
       OpAsmParser::UnresolvedOperand operand;
       if (p.parseAttribute(nameAttr) || p.parseEqual() ||
@@ -79,8 +79,9 @@ static ParseResult parseCreateOperationOpAttributes(
         return failure();
       attrNames.push_back(nameAttr);
       attrOperands.push_back(operand);
-    } while (succeeded(p.parseOptionalComma()));
-    if (p.parseRBrace())
+      return success();
+    };
+    if (p.parseCommaSeparatedList(parseOperands) || p.parseRBrace())
       return failure();
   }
   attrNamesAttr = builder.getArrayAttr(attrNames);
@@ -219,11 +220,15 @@ ParseResult FuncOp::parse(OpAsmParser &parser, OperationState &result) {
          std::string &) { return builder.getFunctionType(argTypes, results); };
 
   return function_interface_impl::parseFunctionOp(
-      parser, result, /*allowVariadic=*/false, buildFuncType);
+      parser, result, /*allowVariadic=*/false,
+      getFunctionTypeAttrName(result.name), buildFuncType,
+      getArgAttrsAttrName(result.name), getResAttrsAttrName(result.name));
 }
 
 void FuncOp::print(OpAsmPrinter &p) {
-  function_interface_impl::printFunctionOp(p, *this, /*isVariadic=*/false);
+  function_interface_impl::printFunctionOp(
+      p, *this, /*isVariadic=*/false, getFunctionTypeAttrName(),
+      getArgAttrsAttrName(), getResAttrsAttrName());
 }
 
 //===----------------------------------------------------------------------===//
@@ -234,6 +239,40 @@ void FuncOp::print(OpAsmPrinter &p) {
 static Type getGetValueTypeOpValueType(Type type) {
   Type valueTy = pdl::ValueType::get(type.getContext());
   return type.isa<pdl::RangeType>() ? pdl::RangeType::get(valueTy) : valueTy;
+}
+
+//===----------------------------------------------------------------------===//
+// pdl::CreateRangeOp
+//===----------------------------------------------------------------------===//
+
+static ParseResult parseRangeType(OpAsmParser &p, TypeRange argumentTypes,
+                                  Type &resultType) {
+  // If arguments were provided, infer the result type from the argument list.
+  if (!argumentTypes.empty()) {
+    resultType =
+        pdl::RangeType::get(pdl::getRangeElementTypeOrSelf(argumentTypes[0]));
+    return success();
+  }
+  // Otherwise, parse the type as a trailing type.
+  return p.parseColonType(resultType);
+}
+
+static void printRangeType(OpAsmPrinter &p, CreateRangeOp op,
+                           TypeRange argumentTypes, Type resultType) {
+  if (argumentTypes.empty())
+    p << ": " << resultType;
+}
+
+LogicalResult CreateRangeOp::verify() {
+  Type elementType = getType().getElementType();
+  for (Type operandType : getOperandTypes()) {
+    Type operandElementType = pdl::getRangeElementTypeOrSelf(operandType);
+    if (operandElementType != elementType) {
+      return emitOpError("expected operand to have element type ")
+             << elementType << ", but got " << operandElementType;
+    }
+  }
+  return success();
 }
 
 //===----------------------------------------------------------------------===//

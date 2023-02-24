@@ -27,12 +27,12 @@ void test2(int *P, int A) {
 }
 
 typedef int atype;
-void test3(x,            /* expected-warning {{a function declaration without a prototype is deprecated in all versions of C and is not supported in C2x}} */
+void test3(x,            /* expected-warning {{a function definition without a prototype is deprecated in all versions of C and is not supported in C2x}} */
            atype         /* expected-error {{unexpected type name 'atype': expected identifier}} */
           ) int x, atype; {}
 
 void test4(x, x) int x; {} // expected-error {{redefinition of parameter 'x'}} \
-                           // expected-warning {{a function declaration without a prototype is deprecated in all versions of C and is not supported in C2x}}
+                           // expected-warning {{a function definition without a prototype is deprecated in all versions of C and is not supported in C2x}}
 
 
 // PR3031
@@ -60,7 +60,7 @@ float *test7(void) {
   return &b.y;   // expected-warning {{incompatible pointer types returning 'int *' from a function with result type 'float *'}}
 }
 
-struct xyz test8(void) { return a; }  // a should be be marked invalid, no diag.
+struct xyz test8(void) { return a; }  // a should be marked invalid, no diag.
 
 
 // Verify that implicit int still works.
@@ -80,10 +80,6 @@ struct test9 {
 struct test10 { int a; } static test10x;
 struct test11 { int a; } const test11x;
 
-// PR6216
-void test12(void) {
-  (void)__builtin_offsetof(struct { char c; int i; }, i);
-}
 
 // rdar://7608537
 struct test13 { int a; } (test13x);
@@ -103,11 +99,11 @@ void *test14b = (void*)test14a; // Make sure test14a didn't get skipped.
 long struct X { int x; } test15(void); // expected-error {{'long struct' is invalid}}
 
 void test16(i) int i j; { } // expected-error {{expected ';' at end of declaration}} \
-                            // expected-warning {{a function declaration without a prototype is deprecated in all versions of C and is not supported in C2x}}
+                            // expected-warning {{a function definition without a prototype is deprecated in all versions of C and is not supported in C2x}}
 void test17(i, j) int i, j k; { } // expected-error {{expected ';' at end of declaration}} \
-                                  // expected-warning {{a function declaration without a prototype is deprecated in all versions of C and is not supported in C2x}}
+                                  // expected-warning {{a function definition without a prototype is deprecated in all versions of C and is not supported in C2x}}
 void knrNoSemi(i) int i { } // expected-error {{expected ';' at end of declaration}} \
-                            // expected-warning {{a function declaration without a prototype is deprecated in all versions of C and is not supported in C2x}}
+                            // expected-warning {{a function definition without a prototype is deprecated in all versions of C and is not supported in C2x}}
 
 // PR12595
 void test18(void) {

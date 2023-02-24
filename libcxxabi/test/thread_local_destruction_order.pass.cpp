@@ -7,7 +7,9 @@
 //===----------------------------------------------------------------------===//
 
 // UNSUPPORTED: c++03
-// UNSUPPORTED: libcxxabi-no-threads
+// UNSUPPORTED: no-threads
+
+// XFAIL: LIBCXX-FREEBSD-FIXME
 
 #include <cassert>
 #include <thread>

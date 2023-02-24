@@ -135,7 +135,7 @@ bool matchAArch64MulConstCombine(
   if (!Const)
     return false;
 
-  const APInt ConstValue = Const->Value.sextOrSelf(Ty.getSizeInBits());
+  APInt ConstValue = Const->Value.sext(Ty.getSizeInBits());
   // The following code is ported from AArch64ISelLowering.
   // Multiplication of a power of two plus/minus one can be done more
   // cheaply as as shift+add/sub. For now, this is true unilaterally. If
@@ -149,7 +149,7 @@ bool matchAArch64MulConstCombine(
   // which equals to (1+2)*16-(1+2).
   // TrailingZeroes is used to test if the mul can be lowered to
   // shift+add+shift.
-  unsigned TrailingZeroes = ConstValue.countTrailingZeros();
+  unsigned TrailingZeroes = ConstValue.countr_zero();
   if (TrailingZeroes) {
     // Conservatively do not lower to shift+add+shift if the mul might be
     // folded into smul or umul.
@@ -355,8 +355,8 @@ public:
       report_fatal_error("Invalid rule identifier");
   }
 
-  virtual bool combine(GISelChangeObserver &Observer, MachineInstr &MI,
-                       MachineIRBuilder &B) const override;
+  bool combine(GISelChangeObserver &Observer, MachineInstr &MI,
+               MachineIRBuilder &B) const override;
 };
 
 bool AArch64PostLegalizerCombinerInfo::combine(GISelChangeObserver &Observer,
@@ -364,7 +364,7 @@ bool AArch64PostLegalizerCombinerInfo::combine(GISelChangeObserver &Observer,
                                                MachineIRBuilder &B) const {
   const auto *LI =
       MI.getParent()->getParent()->getSubtarget().getLegalizerInfo();
-  CombinerHelper Helper(Observer, B, KB, MDT, LI);
+  CombinerHelper Helper(Observer, B, /*IsPreLegalize*/ false, KB, MDT, LI);
   AArch64GenPostLegalizerCombinerHelper Generated(GeneratedRuleCfg);
   return Generated.tryCombineAll(Observer, MI, B, Helper);
 }

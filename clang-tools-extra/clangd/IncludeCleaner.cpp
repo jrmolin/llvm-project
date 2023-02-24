@@ -12,6 +12,8 @@
 #include "ParsedAST.h"
 #include "Protocol.h"
 #include "SourceCode.h"
+#include "clang-include-cleaner/Analysis.h"
+#include "clang-include-cleaner/Types.h"
 #include "index/CanonicalIncludes.h"
 #include "support/Logger.h"
 #include "support/Trace.h"
@@ -31,6 +33,7 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Regex.h"
 #include <functional>
+#include <optional>
 
 namespace clang {
 namespace clangd {
@@ -82,7 +85,7 @@ public:
     // Using templateName case is handled by the override TraverseTemplateName.
     if (TST->getTemplateName().getKind() == TemplateName::UsingTemplate)
       return true;
-    add(TST->getAsCXXRecordDecl());                  // Specialization
+    add(TST->getAsCXXRecordDecl()); // Specialization
     return true;
   }
 
@@ -268,13 +271,17 @@ static bool mayConsiderUnused(const Inclusion &Inc, ParsedAST &AST,
       return true;
     return false;
   }
+  assert(Inc.HeaderID);
+  auto HID = static_cast<IncludeStructure::HeaderID>(*Inc.HeaderID);
+  // FIXME: Ignore the headers with IWYU export pragmas for now, remove this
+  // check when we have more precise tracking of exported headers.
+  if (AST.getIncludeStructure().hasIWYUExport(HID))
+    return false;
+  auto FE = AST.getSourceManager().getFileManager().getFileRef(
+      AST.getIncludeStructure().getRealPath(HID));
+  assert(FE);
   // Headers without include guards have side effects and are not
   // self-contained, skip them.
-  assert(Inc.HeaderID);
-  auto FE = AST.getSourceManager().getFileManager().getFileRef(
-      AST.getIncludeStructure().getRealPath(
-          static_cast<IncludeStructure::HeaderID>(*Inc.HeaderID)));
-  assert(FE);
   if (!AST.getPreprocessor().getHeaderSearchInfo().isFileMultipleIncludeGuarded(
           &FE->getFileEntry())) {
     dlog("{0} doesn't have header guard and will not be considered unused",
@@ -282,7 +289,7 @@ static bool mayConsiderUnused(const Inclusion &Inc, ParsedAST &AST,
     return false;
   }
   for (auto &Filter : Cfg.Diagnostics.Includes.IgnoreHeader) {
-    // Convert the path to Unix slashes and try to match aginast the fiilter.
+    // Convert the path to Unix slashes and try to match against the filter.
     llvm::SmallString<64> Path(Inc.Resolved);
     llvm::sys::path::native(Path, llvm::sys::path::Style::posix);
     if (Filter(Inc.Resolved)) {
@@ -340,7 +347,7 @@ ReferencedLocations findReferencedLocations(ParsedAST &AST) {
 ReferencedFiles findReferencedFiles(
     const ReferencedLocations &Locs, const SourceManager &SM,
     llvm::function_ref<FileID(FileID)> HeaderResponsible,
-    llvm::function_ref<Optional<StringRef>(FileID)> UmbrellaHeader) {
+    llvm::function_ref<std::optional<StringRef>(FileID)> UmbrellaHeader) {
   std::vector<SourceLocation> Sorted{Locs.User.begin(), Locs.User.end()};
   llvm::sort(Sorted); // Group by FileID.
   ReferencedFilesBuilder Builder(SM);
@@ -385,13 +392,13 @@ ReferencedFiles findReferencedFiles(const ReferencedLocations &Locs,
       [&SM, &Includes](FileID ID) {
         return headerResponsible(ID, SM, Includes);
       },
-      [&SM, &CanonIncludes](FileID ID) -> Optional<StringRef> {
+      [&SM, &CanonIncludes](FileID ID) -> std::optional<StringRef> {
         auto Entry = SM.getFileEntryRefForID(ID);
         if (!Entry)
-          return llvm::None;
+          return std::nullopt;
         auto PublicHeader = CanonIncludes.mapHeader(*Entry);
         if (PublicHeader.empty())
-          return llvm::None;
+          return std::nullopt;
         return PublicHeader;
       });
 }
@@ -453,6 +460,9 @@ translateToHeaderIDs(const ReferencedFiles &Files,
   return TranslatedHeaderIDs;
 }
 
+// This is the original clangd-own implementation for computing unused
+// #includes. Eventually it will be deprecated and replaced by the
+// include-cleaner-lib-based implementation.
 std::vector<const Inclusion *> computeUnusedIncludes(ParsedAST &AST) {
   const auto &SM = AST.getSourceManager();
 
@@ -464,13 +474,67 @@ std::vector<const Inclusion *> computeUnusedIncludes(ParsedAST &AST) {
       translateToHeaderIDs(ReferencedFiles, AST.getIncludeStructure(), SM);
   return getUnused(AST, ReferencedHeaders, ReferencedFiles.SpelledUmbrellas);
 }
+std::vector<const Inclusion *>
+computeUnusedIncludesExperimental(ParsedAST &AST) {
+  const auto &SM = AST.getSourceManager();
+  const auto &Includes = AST.getIncludeStructure();
+
+  // FIXME: !!this is a hacky way to collect macro references.
+  std::vector<include_cleaner::SymbolReference> Macros;
+  auto &PP = AST.getPreprocessor();
+  for (const syntax::Token &Tok :
+       AST.getTokens().spelledTokens(SM.getMainFileID())) {
+    auto Macro = locateMacroAt(Tok, PP);
+    if (!Macro)
+      continue;
+    if (auto DefLoc = Macro->Info->getDefinitionLoc(); DefLoc.isValid())
+      Macros.push_back(
+          {Tok.location(),
+           include_cleaner::Macro{/*Name=*/PP.getIdentifierInfo(Tok.text(SM)),
+                                  DefLoc},
+           include_cleaner::RefType::Explicit});
+  }
+  llvm::DenseSet<IncludeStructure::HeaderID> Used;
+  include_cleaner::walkUsed(
+      AST.getLocalTopLevelDecls(), /*MacroRefs=*/Macros,
+      AST.getPragmaIncludes(), SM,
+      [&](const include_cleaner::SymbolReference &Ref,
+          llvm::ArrayRef<include_cleaner::Header> Providers) {
+        for (const auto &H : Providers) {
+          switch (H.kind()) {
+          case include_cleaner::Header::Physical:
+            if (auto HeaderID = Includes.getID(H.physical()))
+              Used.insert(*HeaderID);
+            break;
+          case include_cleaner::Header::Standard:
+            for (auto HeaderID : Includes.StdlibHeaders.lookup(H.standard()))
+              Used.insert(HeaderID);
+            break;
+          case include_cleaner::Header::Verbatim:
+            for (auto *Inc :
+                 Includes.mainFileIncludesWithSpelling(H.verbatim())) {
+              if (!Inc->HeaderID.has_value())
+                continue;
+              IncludeStructure::HeaderID ID =
+                  static_cast<IncludeStructure::HeaderID>(*Inc->HeaderID);
+              Used.insert(ID);
+            }
+            break;
+          }
+        }
+      });
+  return getUnused(AST, Used, /*ReferencedPublicHeaders*/ {});
+}
 
 std::vector<Diag> issueUnusedIncludesDiagnostics(ParsedAST &AST,
                                                  llvm::StringRef Code) {
   const Config &Cfg = Config::current();
-  if (Cfg.Diagnostics.UnusedIncludes != Config::UnusedIncludesPolicy::Strict ||
+  if (Cfg.Diagnostics.UnusedIncludes == Config::UnusedIncludesPolicy::None ||
       Cfg.Diagnostics.SuppressAll ||
       Cfg.Diagnostics.Suppress.contains("unused-includes"))
+    return {};
+  // Interaction is only polished for C/CPP.
+  if (AST.getLangOpts().ObjC)
     return {};
   trace::Span Tracer("IncludeCleaner::issueUnusedIncludesDiagnostics");
   std::vector<Diag> Result;
@@ -479,10 +543,14 @@ std::vector<Diag> issueUnusedIncludesDiagnostics(ParsedAST &AST,
           .getFileEntryRefForID(AST.getSourceManager().getMainFileID())
           ->getName()
           .str();
-  for (const auto *Inc : computeUnusedIncludes(AST)) {
+  const auto &UnusedIncludes =
+      Cfg.Diagnostics.UnusedIncludes == Config::UnusedIncludesPolicy::Experiment
+          ? computeUnusedIncludesExperimental(AST)
+          : computeUnusedIncludes(AST);
+  for (const auto *Inc : UnusedIncludes) {
     Diag D;
     D.Message =
-        llvm::formatv("included header {0} is not used",
+        llvm::formatv("included header {0} is not used directly",
                       llvm::sys::path::filename(
                           Inc->Written.substr(1, Inc->Written.size() - 2),
                           llvm::sys::path::Style::posix));

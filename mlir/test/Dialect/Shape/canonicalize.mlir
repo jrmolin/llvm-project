@@ -1,4 +1,4 @@
-// RUN: mlir-opt -split-input-file -allow-unregistered-dialect -canonicalize %s | FileCheck %s
+// RUN: mlir-opt -split-input-file -allow-unregistered-dialect -canonicalize="test-convergence" %s | FileCheck %s
 
 // CHECK-LABEL: func @f
 func.func @f(%arg0: tensor<2x3x4xf32>) -> tensor<3xindex> {
@@ -179,8 +179,20 @@ func.func @f() -> !shape.shape {
   // CHECK: shape.const_shape [0, 1, 2, 3] : !shape.shape
   %lhs = shape.const_shape [0, 1] : !shape.shape
   %rhs = shape.const_shape [2, 3] : !shape.shape
-  %0 = shape.concat %lhs, %rhs
+  %0 = shape.concat %lhs, %rhs : !shape.shape , !shape.shape -> !shape.shape
   return %0 : !shape.shape
+}
+
+// -----
+
+// Basic case.
+// CHECK-LABEL: func @f
+func.func @f() -> tensor<4xindex> {
+  // CHECK: shape.const_shape [0, 1, 2, 3] : tensor<4xindex>
+  %lhs = shape.const_shape [0, 1] : tensor<2xindex>
+  %rhs = shape.const_shape [2, 3] : tensor<2xindex>
+  %0 = shape.concat %lhs, %rhs : tensor<2xindex>, tensor<2xindex> -> tensor<4xindex>
+  return %0 : tensor<4xindex>
 }
 
 // -----
@@ -803,7 +815,7 @@ func.func @f() {
   // CHECK-NEXT: consume.witness
   // CHECK-NEXT: return
   %cs0 = shape.const_shape [8, 1] : !shape.shape
-  %cs1 = shape.const_shape [1, -1] : !shape.shape
+  %cs1 = shape.const_shape [1, -9223372036854775808] : !shape.shape
   %0 = shape.cstr_broadcastable %cs0, %cs0, %cs1 : !shape.shape, !shape.shape, !shape.shape
   "consume.witness"(%0) : (!shape.witness) -> ()
   return
@@ -818,7 +830,7 @@ func.func @f() {
   // CHECK-NEXT: return
   %cs0 = shape.const_shape [8, 1] : !shape.shape
   %cs1 = shape.const_shape [1, 8] : !shape.shape
-  %cs2 = shape.const_shape [1, -1] : !shape.shape
+  %cs2 = shape.const_shape [1, -9223372036854775808] : !shape.shape
   %0 = shape.cstr_broadcastable %cs0, %cs1, %cs2 : !shape.shape, !shape.shape, !shape.shape
   "consume.witness"(%0) : (!shape.witness) -> ()
   return
@@ -832,8 +844,8 @@ func.func @f() {
   // CHECK-NEXT: consume.witness
   // CHECK-NEXT: return
   %cs0 = shape.const_shape [8, 1] : !shape.shape
-  %cs1 = shape.const_shape [1, -1] : !shape.shape
-  %cs2 = shape.const_shape [8, -1] : !shape.shape
+  %cs1 = shape.const_shape [1, -9223372036854775808] : !shape.shape
+  %cs2 = shape.const_shape [8, -9223372036854775808] : !shape.shape
   %0 = shape.cstr_broadcastable %cs0, %cs1, %cs2 : !shape.shape, !shape.shape, !shape.shape
   "consume.witness"(%0) : (!shape.witness) -> ()
   return

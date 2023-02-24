@@ -13,9 +13,13 @@
 #include "TableGenBackends.h" // Declares all backends.
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/InitLLVM.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/TableGen/Main.h"
 #include "llvm/TableGen/Record.h"
 #include "llvm/TableGen/SetTheory.h"
+#include <cassert>
+#include <string>
+#include <vector>
 
 using namespace llvm;
 
@@ -25,7 +29,6 @@ enum ActionType {
   NullBackend,
   DumpJSON,
   GenEmitter,
-  GenCodeBeads,
   GenRegisterInfo,
   GenInstrInfo,
   GenInstrDocs,
@@ -58,6 +61,8 @@ enum ActionType {
   GenAutomata,
   GenDirectivesEnumDecl,
   GenDirectivesEnumImpl,
+  GenDXILOperation,
+  GenRISCVTargetDef,
 };
 
 namespace llvm {
@@ -82,8 +87,6 @@ cl::opt<ActionType> Action(
         clEnumValN(DumpJSON, "dump-json",
                    "Dump all records as machine-readable JSON"),
         clEnumValN(GenEmitter, "gen-emitter", "Generate machine code emitter"),
-        clEnumValN(GenCodeBeads, "gen-code-beads",
-                   "Generate machine code beads"),
         clEnumValN(GenRegisterInfo, "gen-register-info",
                    "Generate registers and register classes info"),
         clEnumValN(GenInstrInfo, "gen-instr-info",
@@ -141,8 +144,11 @@ cl::opt<ActionType> Action(
         clEnumValN(GenDirectivesEnumDecl, "gen-directive-decl",
                    "Generate directive related declaration code (header file)"),
         clEnumValN(GenDirectivesEnumImpl, "gen-directive-impl",
-                   "Generate directive related implementation code")));
-
+                   "Generate directive related implementation code"),
+        clEnumValN(GenDXILOperation, "gen-dxil-operation",
+                   "Generate DXIL operation information"),
+        clEnumValN(GenRISCVTargetDef, "gen-riscv-target-def",
+                   "Generate the list of CPU for RISCV")));
 cl::OptionCategory PrintEnumsCat("Options for -print-enums");
 cl::opt<std::string> Class("class", cl::desc("Print Enum list for this class"),
                            cl::value_desc("class name"),
@@ -163,9 +169,6 @@ bool LLVMTableGenMain(raw_ostream &OS, RecordKeeper &Records) {
     break;
   case GenEmitter:
     EmitCodeEmitter(Records, OS);
-    break;
-  case GenCodeBeads:
-    EmitCodeBeads(Records, OS);
     break;
   case GenRegisterInfo:
     EmitRegisterInfo(Records, OS);
@@ -218,8 +221,7 @@ bool LLVMTableGenMain(raw_ostream &OS, RecordKeeper &Records) {
   case GenOptRST:
     EmitOptRST(Records, OS);
     break;
-  case PrintEnums:
-  {
+  case PrintEnums: {
     for (Record *Rec : Records.getAllDerivedDefinitions(Class))
       OS << Rec->getName() << ", ";
     OS << "\n";
@@ -277,6 +279,12 @@ bool LLVMTableGenMain(raw_ostream &OS, RecordKeeper &Records) {
     break;
   case GenDirectivesEnumImpl:
     EmitDirectivesImpl(Records, OS);
+    break;
+  case GenDXILOperation:
+    EmitDXILOperation(Records, OS);
+    break;
+  case GenRISCVTargetDef:
+    EmitRISCVTargetDef(Records, OS);
     break;
   }
 

@@ -23,6 +23,7 @@
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/DiagnosticSema.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/JSON.h"
 #include "llvm/Support/ScopedPrinter.h"
 #include "llvm/Support/TargetSelect.h"
 #include "gmock/gmock.h"
@@ -54,6 +55,9 @@ using ::testing::UnorderedElementsAre;
   return Field(&Diag::Fixes, UnorderedElementsAre(FixMatcher1, FixMatcher2));
 }
 
+::testing::Matcher<const Diag &> withID(unsigned ID) {
+  return Field(&Diag::ID, ID);
+}
 ::testing::Matcher<const Diag &>
 withNote(::testing::Matcher<Note> NoteMatcher) {
   return Field(&Diag::Notes, ElementsAre(NoteMatcher));
@@ -389,12 +393,38 @@ TEST(DiagnosticTest, MakeUnique) {
     namespace std {
     // These mocks aren't quite right - we omit unique_ptr for simplicity.
     // forward is included to show its body is not needed to get the diagnostic.
-    template <typename T> T&& forward(T& t) { return static_cast<T&&>(t); }
+    template <typename T> T&& forward(T& t);
     template <typename T, typename... A> T* make_unique(A&&... args) {
        return new T(std::forward<A>(args)...);
     }
     }
   )cpp";
+  EXPECT_THAT(*TU.build().getDiagnostics(),
+              UnorderedElementsAre(
+                  Diag(Main.range(),
+                       "in template: "
+                       "no matching constructor for initialization of 'S'")));
+}
+
+TEST(DiagnosticTest, MakeShared) {
+  // We usually miss diagnostics from header functions as we don't parse them.
+  // std::make_shared is only parsed when --parse-forwarding-functions is set
+  Annotations Main(R"cpp(
+    struct S { S(char*); };
+    auto x = std::[[make_shared]]<S>(42); // error-ok
+  )cpp");
+  TestTU TU = TestTU::withCode(Main.code());
+  TU.HeaderCode = R"cpp(
+    namespace std {
+    // These mocks aren't quite right - we omit shared_ptr for simplicity.
+    // forward is included to show its body is not needed to get the diagnostic.
+    template <typename T> T&& forward(T& t);
+    template <typename T, typename... A> T* make_shared(A&&... args) {
+       return new T(std::forward<A>(args)...);
+    }
+    }
+  )cpp";
+  TU.ParseOpts.PreambleParseForwardingFunctions = true;
   EXPECT_THAT(*TU.build().getDiagnostics(),
               UnorderedElementsAre(
                   Diag(Main.range(),
@@ -496,6 +526,37 @@ TEST(DiagnosticTest, ClangTidySuppressionComment) {
                              "point context; possible loss of precision"),
           diagSource(Diag::ClangTidy),
           diagName("bugprone-integer-division")))));
+}
+
+TEST(DiagnosticTest, ClangTidySystemMacro) {
+  Annotations Main(R"cpp(
+    #include "user.h"
+    #include "system.h"
+    int i = 3;
+    double x = $inline[[8]] / i;
+    double y = $user[[DIVIDE_USER]](i);
+    double z = DIVIDE_SYS(i);
+  )cpp");
+
+  auto TU = TestTU::withCode(Main.code());
+  TU.AdditionalFiles["user.h"] = R"cpp(
+    #define DIVIDE_USER(Y) 8/Y
+  )cpp";
+  TU.AdditionalFiles["system.h"] = R"cpp(
+    #pragma clang system_header
+    #define DIVIDE_SYS(Y) 8/Y
+  )cpp";
+
+  TU.ClangTidyProvider = addTidyChecks("bugprone-integer-division");
+  std::string BadDivision = "result of integer division used in a floating "
+                            "point context; possible loss of precision";
+
+  // Expect to see warning from user macros, but not system macros.
+  // This matches clang-tidy --system-headers=0 (the default).
+  EXPECT_THAT(*TU.build().getDiagnostics(),
+              ifTidyChecks(
+                  UnorderedElementsAre(Diag(Main.range("inline"), BadDivision),
+                                       Diag(Main.range("user"), BadDivision))));
 }
 
 TEST(DiagnosticTest, ClangTidyWarningAsError) {
@@ -795,6 +856,19 @@ TEST(DiagnosticsTest, IgnoreVerify) {
   EXPECT_THAT(*TU.build().getDiagnostics(), IsEmpty());
 }
 
+TEST(DiagnosticTest, IgnoreBEFilelistOptions) {
+  auto TU = TestTU::withCode("");
+  TU.ExtraArgs.push_back("-Xclang");
+  for (const auto *DisableOption :
+       {"-fsanitize-ignorelist=null", "-fprofile-list=null",
+        "-fxray-always-instrument=null", "-fxray-never-instrument=null",
+        "-fxray-attr-list=null"}) {
+    TU.ExtraArgs.push_back(DisableOption);
+    EXPECT_THAT(*TU.build().getDiagnostics(), IsEmpty());
+    TU.ExtraArgs.pop_back();
+  }
+}
+
 // Recursive main-file include is diagnosed, and doesn't crash.
 TEST(DiagnosticsTest, RecursivePreamble) {
   auto TU = TestTU::withCode(R"cpp(
@@ -845,7 +919,7 @@ void foo(int *x);
   auto AST = TU.build();
   EXPECT_THAT(*AST.getDiagnostics(), IsEmpty());
   const auto *X = cast<FunctionDecl>(findDecl(AST, "foo")).getParamDecl(0);
-  ASSERT_TRUE(X->getOriginalType()->getNullability(X->getASTContext()) ==
+  ASSERT_TRUE(X->getOriginalType()->getNullability() ==
               NullabilityKind::NonNull);
 }
 
@@ -863,11 +937,10 @@ void bar(int *Y);
   EXPECT_THAT(*AST.getDiagnostics(),
               ElementsAre(diagName("pp_eof_in_assume_nonnull")));
   const auto *X = cast<FunctionDecl>(findDecl(AST, "foo")).getParamDecl(0);
-  ASSERT_TRUE(X->getOriginalType()->getNullability(X->getASTContext()) ==
+  ASSERT_TRUE(X->getOriginalType()->getNullability() ==
               NullabilityKind::NonNull);
   const auto *Y = cast<FunctionDecl>(findDecl(AST, "bar")).getParamDecl(0);
-  ASSERT_FALSE(
-      Y->getOriginalType()->getNullability(X->getASTContext()).hasValue());
+  ASSERT_FALSE(Y->getOriginalType()->getNullability());
 }
 
 TEST(DiagnosticsTest, InsideMacros) {
@@ -940,6 +1013,7 @@ TEST(DiagnosticsTest, ToLSP) {
   D.Severity = DiagnosticsEngine::Error;
   D.File = "foo/bar/main.cpp";
   D.AbsFile = std::string(MainFile.file());
+  D.OpaqueData["test"] = "bar";
 
   clangd::Note NoteInMain;
   NoteInMain.Message = "declared somewhere in the main file";
@@ -978,6 +1052,7 @@ main.cpp:6:7: remark: declared somewhere in the main file
 ../foo/baz/header.h:10:11:
 note: declared somewhere in the header file)";
   MainLSP.tags = {DiagnosticTag::Unnecessary};
+  MainLSP.data = D.OpaqueData;
 
   clangd::Diagnostic NoteInMainLSP;
   NoteInMainLSP.range = NoteInMain.Range;
@@ -1043,7 +1118,7 @@ buildIndexWithSymbol(llvm::ArrayRef<SymbolWithHeader> Syms) {
     Sym.Flags |= Symbol::IndexedForCodeCompletion;
     Sym.CanonicalDeclaration.FileURI = S.DeclaringFile.c_str();
     Sym.Definition.FileURI = S.DeclaringFile.c_str();
-    Sym.IncludeHeaders.emplace_back(S.IncludeHeader, 1);
+    Sym.IncludeHeaders.emplace_back(S.IncludeHeader, 1, Symbol::Include);
     Slab.insert(Sym);
   }
   return MemIndex::build(std::move(Slab).build(), RefSlab(), RelationSlab());
@@ -1101,7 +1176,7 @@ TEST(IncludeFixerTest, IncompleteEnum) {
   Symbol Sym = enm("X");
   Sym.Flags |= Symbol::IndexedForCodeCompletion;
   Sym.CanonicalDeclaration.FileURI = Sym.Definition.FileURI = "unittest:///x.h";
-  Sym.IncludeHeaders.emplace_back("\"x.h\"", 1);
+  Sym.IncludeHeaders.emplace_back("\"x.h\"", 1, Symbol::Include);
   SymbolSlab::Builder Slab;
   Slab.insert(Sym);
   auto Index =
@@ -1144,7 +1219,7 @@ int main() {
   Sym.Flags |= Symbol::IndexedForCodeCompletion;
   Sym.CanonicalDeclaration.FileURI = "unittest:///x.h";
   Sym.Definition.FileURI = "unittest:///x.cc";
-  Sym.IncludeHeaders.emplace_back("\"x.h\"", 1);
+  Sym.IncludeHeaders.emplace_back("\"x.h\"", 1, Symbol::Include);
 
   SymbolSlab::Builder Slab;
   Slab.insert(Sym);
@@ -1437,11 +1512,12 @@ TEST(IncludeFixerTest, NoCrashOnTemplateInstantiations) {
 TEST(IncludeFixerTest, HeaderNamedInDiag) {
   Annotations Test(R"cpp(
     $insert[[]]int main() {
-      [[printf]](""); // error-ok
+      [[printf]]("");
     }
   )cpp");
   auto TU = TestTU::withCode(Test.code());
-  TU.ExtraArgs = {"-xc"};
+  TU.ExtraArgs = {"-xc", "-std=c99",
+                  "-Wno-error=implicit-function-declaration"};
   auto Index = buildIndexWithSymbol({});
   TU.ExternalIndex = Index.get();
 
@@ -1454,18 +1530,27 @@ TEST(IncludeFixerTest, HeaderNamedInDiag) {
                              "declarations"),
           withFix(Fix(Test.range("insert"), "#include <stdio.h>\n",
                       "Include <stdio.h> for symbol printf")))));
+
+  TU.ExtraArgs = {"-xc", "-std=c89"};
+  EXPECT_THAT(
+      *TU.build().getDiagnostics(),
+      ElementsAre(AllOf(
+          Diag(Test.range(), "implicitly declaring library function 'printf' "
+                             "with type 'int (const char *, ...)'"),
+          withFix(Fix(Test.range("insert"), "#include <stdio.h>\n",
+                      "Include <stdio.h> for symbol printf")))));
 }
 
 TEST(IncludeFixerTest, CImplicitFunctionDecl) {
-  Annotations Test("void x() { [[foo]](); /* error-ok */ }");
+  Annotations Test("void x() { [[foo]](); }");
   auto TU = TestTU::withCode(Test.code());
   TU.Filename = "test.c";
-  TU.ExtraArgs.push_back("-std=c99");
+  TU.ExtraArgs = {"-std=c99", "-Wno-error=implicit-function-declaration"};
 
   Symbol Sym = func("foo");
   Sym.Flags |= Symbol::IndexedForCodeCompletion;
   Sym.CanonicalDeclaration.FileURI = "unittest:///foo.h";
-  Sym.IncludeHeaders.emplace_back("\"foo.h\"", 1);
+  Sym.IncludeHeaders.emplace_back("\"foo.h\"", 1, Symbol::Include);
 
   SymbolSlab::Builder Slab;
   Slab.insert(Sym);
@@ -1481,6 +1566,13 @@ TEST(IncludeFixerTest, CImplicitFunctionDecl) {
                "support implicit function declarations"),
           withFix(Fix(Range{}, "#include \"foo.h\"\n",
                       "Include \"foo.h\" for symbol foo")))));
+
+  TU.ExtraArgs = {"-std=c89", "-Wall"};
+  EXPECT_THAT(*TU.build().getDiagnostics(),
+              ElementsAre(AllOf(
+                  Diag(Test.range(), "implicit declaration of function 'foo'"),
+                  withFix(Fix(Range{}, "#include \"foo.h\"\n",
+                              "Include \"foo.h\" for symbol foo")))));
 }
 
 TEST(DiagsInHeaders, DiagInsideHeader) {
@@ -1762,6 +1854,17 @@ TEST(Diagnostics, Tags) {
                         withTag(DiagnosticTag::Unnecessary)),
                   AllOf(Diag(Test.range("deprecated"), "'bar' is deprecated"),
                         withTag(DiagnosticTag::Deprecated))));
+
+  Test = Annotations(R"cpp(
+    $typedef[[typedef int INT]];
+  )cpp");
+  TU.Code = Test.code();
+  TU.ClangTidyProvider = addTidyChecks("modernize-use-using");
+  EXPECT_THAT(
+      *TU.build().getDiagnostics(),
+      ifTidyChecks(UnorderedElementsAre(
+          AllOf(Diag(Test.range("typedef"), "use 'using' instead of 'typedef'"),
+                withTag(DiagnosticTag::Deprecated)))));
 }
 
 TEST(DiagnosticsTest, IncludeCleaner) {
@@ -1802,12 +1905,17 @@ $fix[[  $diag[[#include "unused.h"]]
   Cfg.Diagnostics.Includes.IgnoreHeader.emplace_back(
       [](llvm::StringRef Header) { return Header.endswith("ignore.h"); });
   WithContextValue WithCfg(Config::Key, std::move(Cfg));
+  auto AST = TU.build();
   EXPECT_THAT(
-      *TU.build().getDiagnostics(),
+      *AST.getDiagnostics(),
       UnorderedElementsAre(AllOf(
-          Diag(Test.range("diag"), "included header unused.h is not used"),
+          Diag(Test.range("diag"),
+               "included header unused.h is not used directly"),
           withTag(DiagnosticTag::Unnecessary), diagSource(Diag::Clangd),
           withFix(Fix(Test.range("fix"), "", "remove #include directive")))));
+  auto &Diag = AST.getDiagnostics()->front();
+  EXPECT_EQ(getDiagnosticDocURI(Diag.Source, Diag.ID, Diag.Name),
+            std::string("https://clangd.llvm.org/guides/include-cleaner"));
   Cfg.Diagnostics.SuppressAll = true;
   WithContextValue SuppressAllWithCfg(Config::Key, std::move(Cfg));
   EXPECT_THAT(*TU.build().getDiagnostics(), IsEmpty());
@@ -1839,6 +1947,20 @@ TEST(DiagnosticsTest, FixItFromHeader) {
                       "'int' to 'int *' for 1st argument; take the address of "
                       "the argument with &")))));
 }
+
+TEST(DiagnosticsTest, UnusedInHeader) {
+  // Clang diagnoses unused static inline functions outside headers.
+  auto TU = TestTU::withCode("static inline void foo(void) {}");
+  TU.ExtraArgs.push_back("-Wunused-function");
+  TU.Filename = "test.c";
+  EXPECT_THAT(*TU.build().getDiagnostics(),
+              ElementsAre(withID(diag::warn_unused_function)));
+  // Sema should recognize a *.h file open in clangd as a header.
+  // https://github.com/clangd/vscode-clangd/issues/360
+  TU.Filename = "test.h";
+  EXPECT_THAT(*TU.build().getDiagnostics(), IsEmpty());
+}
+
 } // namespace
 } // namespace clangd
 } // namespace clang

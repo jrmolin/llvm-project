@@ -71,25 +71,10 @@ external add_licm
   : [< Llvm.PassManager.any ] Llvm.PassManager.t -> unit
   = "llvm_add_licm"
 
-(** See the [llvm::createLoopDeletionPass] function. *)
-external add_loop_deletion
-  : [< Llvm.PassManager.any ] Llvm.PassManager.t -> unit
-  = "llvm_add_loop_deletion"
-
-(** See the [llvm::createLoopIdiomPass] function. *)
-external add_loop_idiom
-  : [< Llvm.PassManager.any ] Llvm.PassManager.t -> unit
-  = "llvm_add_loop_idiom"
-
 (** See the [llvm::createLoopRotatePass] function. *)
 external add_loop_rotation
   : [< Llvm.PassManager.any ] Llvm.PassManager.t -> unit
   = "llvm_add_loop_rotate"
-
-(** See the [llvm::createLoopRerollPass] function. *)
-external add_loop_reroll
-  : [< Llvm.PassManager.any ] Llvm.PassManager.t -> unit
-  = "llvm_add_loop_reroll"
 
 (** See the [llvm::createLoopUnrollPass] function. *)
 external add_loop_unroll
@@ -125,11 +110,6 @@ external add_memory_to_register_promotion
 external add_reassociation
   : [< Llvm.PassManager.any ] Llvm.PassManager.t -> unit
   = "llvm_add_reassociation"
-
-(** See the [llvm::createSCCPPass] function. *)
-external add_sccp
-  : [< Llvm.PassManager.any ] Llvm.PassManager.t -> unit
-  = "llvm_add_sccp"
 
 (** See the [llvm::createSROAPass] function. *)
 external add_scalar_repl_aggregation

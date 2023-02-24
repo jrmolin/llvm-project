@@ -15,10 +15,12 @@
 #define LLVM_LIB_TARGET_AMDGPU_GCNSUBTARGET_H
 
 #include "AMDGPUCallLowering.h"
+#include "AMDGPURegisterBankInfo.h"
 #include "AMDGPUSubtarget.h"
 #include "SIFrameLowering.h"
 #include "SIISelLowering.h"
 #include "SIInstrInfo.h"
+#include "Utils/AMDGPUBaseInfo.h"
 #include "llvm/CodeGen/SelectionDAGTargetInfo.h"
 
 #define GET_SUBTARGETINFO_HEADER
@@ -30,10 +32,9 @@ class GCNTargetMachine;
 
 class GCNSubtarget final : public AMDGPUGenSubtargetInfo,
                            public AMDGPUSubtarget {
-
+public:
   using AMDGPUSubtarget::getMaxWavesPerEU;
 
-public:
   // Following 2 enums are documented at:
   //   - https://llvm.org/docs/AMDGPUUsage.html#trap-handler-abi
   enum class TrapHandlerAbi {
@@ -52,7 +53,7 @@ private:
   std::unique_ptr<InlineAsmLowering> InlineAsmLoweringInfo;
   std::unique_ptr<InstructionSelector> InstSelector;
   std::unique_ptr<LegalizerInfo> Legalizer;
-  std::unique_ptr<RegisterBankInfo> RegBankInfo;
+  std::unique_ptr<AMDGPURegisterBankInfo> RegBankInfo;
 
 protected:
   // Basic subtarget description.
@@ -72,6 +73,7 @@ protected:
   // Dynamically set bits that enable features.
   bool FlatForGlobal = false;
   bool AutoWaitcntBeforeBarrier = false;
+  bool BackOffBarrier = false;
   bool UnalignedScratchAccess = false;
   bool UnalignedAccessMode = false;
   bool HasApertureRegs = false;
@@ -103,9 +105,11 @@ protected:
   bool GFX90AInsts = false;
   bool GFX940Insts = false;
   bool GFX10Insts = false;
+  bool GFX11Insts = false;
   bool GFX10_3Insts = false;
   bool GFX7GFX8GFX9Insts = false;
   bool SGPRInitBug = false;
+  bool UserSGPRInit16Bug = false;
   bool NegativeScratchOffsetBug = false;
   bool NegativeUnalignedScratchOffsetBug = false;
   bool HasSMemRealTime = false;
@@ -127,13 +131,14 @@ protected:
   bool HasImageInsts = false;
   bool HasExtendedImageInsts = false;
   bool HasR128A16 = false;
-  bool HasGFX10A16 = false;
+  bool HasA16 = false;
   bool HasG16 = false;
   bool HasNSAEncoding = false;
-  unsigned NSAMaxSize = 0;
+  bool HasPartialNSAEncoding = false;
   bool GFX10_AEncoding = false;
   bool GFX10_BEncoding = false;
   bool HasDLInsts = false;
+  bool HasFmacF64Inst = false;
   bool HasDot1Insts = false;
   bool HasDot2Insts = false;
   bool HasDot3Insts = false;
@@ -141,11 +146,16 @@ protected:
   bool HasDot5Insts = false;
   bool HasDot6Insts = false;
   bool HasDot7Insts = false;
+  bool HasDot8Insts = false;
+  bool HasDot9Insts = false;
+  bool HasDot10Insts = false;
   bool HasMAIInsts = false;
+  bool HasFP8Insts = false;
   bool HasPkFmacF16Inst = false;
   bool HasAtomicFaddRtnInsts = false;
   bool HasAtomicFaddNoRtnInsts = false;
   bool HasAtomicPkFaddNoRtnInsts = false;
+  bool HasFlatAtomicFaddF32Inst = false;
   bool SupportsSRAMECC = false;
 
   // This should not be used directly. 'TargetID' tracks the dynamic settings
@@ -166,6 +176,7 @@ protected:
   bool ScalarFlatScratchInsts = false;
   bool HasArchitectedFlatScratch = false;
   bool EnableFlatScratch = false;
+  bool HasArchitectedSGPRs = false;
   bool AddNoCarryInsts = false;
   bool HasUnpackedD16VMem = false;
   bool LDSMisalignedBug = false;
@@ -187,6 +198,10 @@ protected:
   bool HasFlatSegmentOffsetBug = false;
   bool HasImageStoreD16Bug = false;
   bool HasImageGather4D16Bug = false;
+  bool HasGFX11FullVGPRs = false;
+  bool HasMADIntraFwdBug = false;
+  bool HasVOPDInsts = false;
+  bool HasVALUTransUseHazard = false;
 
   // Dummy feature to use for assembler in tablegen.
   bool FeatureDisable = false;
@@ -198,9 +213,6 @@ private:
   SIFrameLowering FrameLowering;
 
 public:
-  // See COMPUTE_TMPRING_SIZE.WAVESIZE, 13-bit field in units of 256-dword.
-  static const unsigned MaxWaveScratchSize = (256 * 4) * ((1 << 13) - 1);
-
   GCNSubtarget(const Triple &TT, StringRef GPU, StringRef FS,
                const GCNTargetMachine &TM);
   ~GCNSubtarget() override;
@@ -240,7 +252,7 @@ public:
     return Legalizer.get();
   }
 
-  const RegisterBankInfo *getRegBankInfo() const override {
+  const AMDGPURegisterBankInfo *getRegBankInfo() const override {
     return RegBankInfo.get();
   }
 
@@ -263,9 +275,19 @@ public:
     return (Generation)Gen;
   }
 
+  unsigned getMaxWaveScratchSize() const {
+    // See COMPUTE_TMPRING_SIZE.WAVESIZE.
+    if (getGeneration() < GFX11) {
+      // 13-bit field in units of 256-dword.
+      return (256 * 4) * ((1 << 13) - 1);
+    }
+    // 15-bit field in units of 64-dword.
+    return (64 * 4) * ((1 << 15) - 1);
+  }
+
   /// Return the number of high bits known to be zero for a frame index.
   unsigned getKnownHighZeroBitsForFrameIndex() const {
-    return countLeadingZeros(MaxWaveScratchSize) + getWavefrontSizeLog2();
+    return llvm::countl_zero(getMaxWaveScratchSize()) + getWavefrontSizeLog2();
   }
 
   int getLDSBankCount() const {
@@ -282,6 +304,8 @@ public:
   /// a 32-bit register implicitly zeroes the high 16-bits, rather than preserve
   /// the original value.
   bool zeroesHigh16BitsOfDest(unsigned Opcode) const;
+
+  bool supportsWGP() const { return getGeneration() >= GFX10; }
 
   bool hasIntClamp() const {
     return HasIntClamp;
@@ -495,6 +519,12 @@ public:
     return AutoWaitcntBeforeBarrier;
   }
 
+  /// \returns true if the target supports backing off of s_barrier instructions
+  /// when an exception is raised.
+  bool supportsBackOffBarrier() const {
+    return BackOffBarrier;
+  }
+
   bool hasUnalignedBufferAccess() const {
     return UnalignedBufferAccess;
   }
@@ -566,7 +596,7 @@ public:
     return hasFlatScratchInsts() && (hasGFX10_3Insts() || hasGFX940Insts());
   }
 
-  bool hasFlatScratchSVSMode() const { return GFX940Insts; }
+  bool hasFlatScratchSVSMode() const { return GFX940Insts || GFX11Insts; }
 
   bool hasScalarFlatScratchInsts() const {
     return ScalarFlatScratchInsts;
@@ -674,6 +704,8 @@ public:
     return HasDLInsts;
   }
 
+  bool hasFmacF64Inst() const { return HasFmacF64Inst; }
+
   bool hasDot1Insts() const {
     return HasDot1Insts;
   }
@@ -702,8 +734,24 @@ public:
     return HasDot7Insts;
   }
 
+  bool hasDot8Insts() const {
+    return HasDot8Insts;
+  }
+
+  bool hasDot9Insts() const {
+    return HasDot9Insts;
+  }
+
+  bool hasDot10Insts() const {
+    return HasDot10Insts;
+  }
+
   bool hasMAIInsts() const {
     return HasMAIInsts;
+  }
+
+  bool hasFP8Insts() const {
+    return HasFP8Insts;
   }
 
   bool hasPkFmacF16Inst() const {
@@ -719,6 +767,8 @@ public:
   bool hasAtomicFaddNoRtnInsts() const { return HasAtomicFaddNoRtnInsts; }
 
   bool hasAtomicPkFaddNoRtnInsts() const { return HasAtomicPkFaddNoRtnInsts; }
+
+  bool hasFlatAtomicFaddF32Inst() const { return HasFlatAtomicFaddF32Inst; }
 
   bool hasNoSdstCMPX() const {
     return HasNoSdstCMPX;
@@ -751,6 +801,8 @@ public:
   bool vmemWriteNeedsExpWaitcnt() const {
     return getGeneration() < SEA_ISLANDS;
   }
+
+  bool hasInstPrefetch() const { return getGeneration() >= GFX10; }
 
   // Scratch is allocated in 256 dword per wave blocks for the entire
   // wavefront. When viewed from the perspective of an arbitrary workitem, this
@@ -821,6 +873,9 @@ public:
   /// \returns true if the subtarget has the v_permlanex16_b32 instruction.
   bool hasPermLaneX16() const { return getGeneration() >= GFX10; }
 
+  /// \returns true if the subtarget has the v_permlane64_b32 instruction.
+  bool hasPermLane64() const { return getGeneration() >= GFX11; }
+
   bool hasDPP() const {
     return HasDPP;
   }
@@ -861,11 +916,7 @@ public:
     return HasR128A16;
   }
 
-  bool hasGFX10A16() const {
-    return HasGFX10A16;
-  }
-
-  bool hasA16() const { return hasR128A16() || hasGFX10A16(); }
+  bool hasA16() const { return HasA16; }
 
   bool hasG16() const { return HasG16; }
 
@@ -877,9 +928,13 @@ public:
 
   bool hasImageGather4D16Bug() const { return HasImageGather4D16Bug; }
 
+  bool hasMADIntraFwdBug() const { return HasMADIntraFwdBug; }
+
   bool hasNSAEncoding() const { return HasNSAEncoding; }
 
-  unsigned getNSAMaxSize() const { return NSAMaxSize; }
+  bool hasPartialNSAEncoding() const { return HasPartialNSAEncoding; }
+
+  unsigned getNSAMaxSize() const { return AMDGPU::getNSAMaxSize(*this); }
 
   bool hasGFX10_AEncoding() const {
     return GFX10_AEncoding;
@@ -909,6 +964,10 @@ public:
 
   bool hasSGPRInitBug() const {
     return SGPRInitBug;
+  }
+
+  bool hasUserSGPRInit16Bug() const {
+    return UserSGPRInit16Bug && isWave32();
   }
 
   bool hasNegativeScratchOffsetBug() const { return NegativeScratchOffsetBug; }
@@ -975,6 +1034,12 @@ public:
     return HasLdsBranchVmemWARHazard;
   }
 
+  // Shift amount of a 64 bit shift cannot be a highest allocated register
+  // if also at the end of the allocation block.
+  bool hasShift64HighRegBug() const {
+    return GFX90AInsts && !GFX940Insts;
+  }
+
   // Has one cycle hazard on transcendental instruction feeding a
   // non transcendental VALU.
   bool hasTransForwardingHazard() const { return GFX940Insts; }
@@ -1001,8 +1066,44 @@ public:
 
   bool hasGFX90AInsts() const { return GFX90AInsts; }
 
+  bool hasFPAtomicToDenormModeHazard() const {
+    return getGeneration() == GFX10;
+  }
+
+  bool hasVOP3DPP() const { return getGeneration() >= GFX11; }
+
+  bool hasLdsDirect() const { return getGeneration() >= GFX11; }
+
+  bool hasVALUPartialForwardingHazard() const {
+    return getGeneration() >= GFX11;
+  }
+
+  bool hasVALUTransUseHazard() const { return HasVALUTransUseHazard; }
+
+  bool hasVALUMaskWriteHazard() const { return getGeneration() >= GFX11; }
+
   /// Return if operations acting on VGPR tuples require even alignment.
   bool needsAlignedVGPRs() const { return GFX90AInsts; }
+
+  /// Return true if the target has the S_PACK_HL_B32_B16 instruction.
+  bool hasSPackHL() const { return GFX11Insts; }
+
+  /// Return true if the target's EXP instruction has the COMPR flag, which
+  /// affects the meaning of the EN (enable) bits.
+  bool hasCompressedExport() const { return !GFX11Insts; }
+
+  /// Return true if the target's EXP instruction supports the NULL export
+  /// target.
+  bool hasNullExportTarget() const { return !GFX11Insts; }
+
+  bool hasGFX11FullVGPRs() const { return HasGFX11FullVGPRs; }
+
+  bool hasVOPDInsts() const { return HasVOPDInsts; }
+
+  bool hasFlatScratchSVSSwizzleBug() const { return getGeneration() == GFX11; }
+
+  /// Return true if the target has the S_DELAY_ALU instruction.
+  bool hasDelayAlu() const { return GFX11Insts; }
 
   bool hasPackedTID() const { return HasPackedTID; }
 
@@ -1035,11 +1136,17 @@ public:
   /// In this case it is readonly.
   bool flatScratchIsArchitected() const { return HasArchitectedFlatScratch; }
 
+  /// \returns true if the architected SGPRs are enabled.
+  bool hasArchitectedSGPRs() const { return HasArchitectedSGPRs; }
+
   /// \returns true if the machine has merged shaders in which s0-s7 are
   /// reserved by the hardware and user SGPRs start at s8
   bool hasMergedShaders() const {
     return getGeneration() >= GFX9;
   }
+
+  // \returns true if the target supports the pre-NGG legacy geometry path.
+  bool hasLegacyGeometry() const { return getGeneration() < GFX11; }
 
   /// \returns SGPR allocation granularity supported by the subtarget.
   unsigned getSGPRAllocGranule() const {
@@ -1131,14 +1238,14 @@ public:
     return AMDGPU::IsaInfo::getAddressableNumVGPRs(this);
   }
 
-  /// \returns Minimum number of VGPRs that meets given number of waves per
-  /// execution unit requirement supported by the subtarget.
+  /// \returns the minimum number of VGPRs that will prevent achieving more than
+  /// the specified number of waves \p WavesPerEU.
   unsigned getMinNumVGPRs(unsigned WavesPerEU) const {
     return AMDGPU::IsaInfo::getMinNumVGPRs(this, WavesPerEU);
   }
 
-  /// \returns Maximum number of VGPRs that meets given number of waves per
-  /// execution unit requirement supported by the subtarget.
+  /// \returns the maximum number of VGPRs that can be used and still achieved
+  /// at least the specified number of waves \p WavesPerEU.
   unsigned getMaxNumVGPRs(unsigned WavesPerEU) const {
     return AMDGPU::IsaInfo::getMaxNumVGPRs(this, WavesPerEU);
   }
@@ -1221,6 +1328,14 @@ public:
 
   void adjustSchedDependency(SUnit *Def, int DefOpIdx, SUnit *Use, int UseOpIdx,
                              SDep &Dep) const override;
+
+  // \returns true if it's beneficial on this subtarget for the scheduler to
+  // cluster stores as well as loads.
+  bool shouldClusterStores() const { return getGeneration() >= GFX11; }
+
+  // \returns the number of address arguments from which to enable MIMG NSA
+  // on supported architectures.
+  unsigned getNSAThreshold(const MachineFunction &MF) const;
 };
 
 } // end namespace llvm

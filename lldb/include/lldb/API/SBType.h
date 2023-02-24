@@ -106,6 +106,9 @@ public:
   SBType();
 
   SBType(const lldb::SBType &rhs);
+#ifndef SWIG
+  SBType(const lldb::TypeImplSP &);
+#endif
 
   ~SBType();
 
@@ -182,6 +185,8 @@ public:
 
   lldb::SBType GetTemplateArgumentType(uint32_t idx);
 
+  /// Return the TemplateArgumentKind of the template argument at index idx.
+  /// Variadic argument packs are automatically expanded.
   lldb::TemplateArgumentKind GetTemplateArgumentKind(uint32_t idx);
 
   lldb::SBType GetFunctionReturnType();
@@ -237,7 +242,6 @@ protected:
 
   SBType(const lldb_private::CompilerType &);
   SBType(const lldb::TypeSP &);
-  SBType(const lldb::TypeImplSP &);
 };
 
 class SBTypeList {

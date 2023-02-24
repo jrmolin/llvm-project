@@ -950,6 +950,14 @@ static SDValue performMADD_MSUBCombine(SDNode *ROOTNode, SelectionDAG &CurDAG,
       ROOTNode->getOperand(1).getOpcode() != ISD::MUL)
     return SDValue();
 
+  // In the case where we have a multiplication as the left operand of
+  // of a subtraction, we can't combine into a MipsISD::MSub node as the
+  // the instruction definition of msub(u) places the multiplication on
+  // on the right.
+  if (ROOTNode->getOpcode() == ISD::SUB &&
+      ROOTNode->getOperand(0).getOpcode() == ISD::MUL)
+    return SDValue();
+
   // We don't handle vector types here.
   if (ROOTNode->getValueType(0).isVector())
     return SDValue();
@@ -1164,11 +1172,11 @@ SDValue  MipsTargetLowering::PerformDAGCombine(SDNode *N, DAGCombinerInfo &DCI)
   return SDValue();
 }
 
-bool MipsTargetLowering::isCheapToSpeculateCttz() const {
+bool MipsTargetLowering::isCheapToSpeculateCttz(Type *Ty) const {
   return Subtarget.hasMips32();
 }
 
-bool MipsTargetLowering::isCheapToSpeculateCtlz() const {
+bool MipsTargetLowering::isCheapToSpeculateCtlz(Type *Ty) const {
   return Subtarget.hasMips32();
 }
 
@@ -1184,6 +1192,12 @@ bool MipsTargetLowering::hasBitTest(SDValue X, SDValue Y) const {
 
 bool MipsTargetLowering::shouldFoldConstantShiftPairToMask(
     const SDNode *N, CombineLevel Level) const {
+  assert(((N->getOpcode() == ISD::SHL &&
+           N->getOperand(0).getOpcode() == ISD::SRL) ||
+          (N->getOpcode() == ISD::SRL &&
+           N->getOperand(0).getOpcode() == ISD::SHL)) &&
+         "Expected shift-shift mask");
+
   if (N->getOperand(0).getValueType().isVector())
     return false;
   return true;
@@ -2670,7 +2684,7 @@ SDValue MipsTargetLowering::lowerLOAD(SDValue Op, SelectionDAG &DAG) const {
     return Op;
 
   // Return if load is aligned or if MemVT is neither i32 nor i64.
-  if ((LD->getAlignment() >= MemVT.getSizeInBits() / 8) ||
+  if ((LD->getAlign().value() >= (MemVT.getSizeInBits() / 8)) ||
       ((MemVT != MVT::i32) && (MemVT != MVT::i64)))
     return SDValue();
 
@@ -2784,7 +2798,7 @@ static SDValue lowerFP_TO_SINT_STORE(StoreSDNode *SD, SelectionDAG &DAG,
   SDValue Tr = DAG.getNode(MipsISD::TruncIntFP, SDLoc(Val), FPTy,
                            Val.getOperand(0));
   return DAG.getStore(SD->getChain(), SDLoc(SD), Tr, SD->getBasePtr(),
-                      SD->getPointerInfo(), SD->getAlignment(),
+                      SD->getPointerInfo(), SD->getAlign(),
                       SD->getMemOperand()->getFlags());
 }
 
@@ -2794,7 +2808,7 @@ SDValue MipsTargetLowering::lowerSTORE(SDValue Op, SelectionDAG &DAG) const {
 
   // Lower unaligned integer stores.
   if (!Subtarget.systemSupportsUnalignedAccess() &&
-      (SD->getAlignment() < MemVT.getSizeInBits() / 8) &&
+      (SD->getAlign().value() < (MemVT.getSizeInBits() / 8)) &&
       ((MemVT == MVT::i32) || (MemVT == MVT::i64)))
     return lowerUnalignedIntStore(SD, DAG, Subtarget.isLittle());
 
@@ -3236,7 +3250,6 @@ MipsTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
   // byval arguments to the stack.
   unsigned StackAlignment = TFL->getStackAlignment();
   NextStackOffset = alignTo(NextStackOffset, StackAlignment);
-  SDValue NextStackOffsetVal = DAG.getIntPtrConstant(NextStackOffset, DL, true);
 
   if (!(IsTailCall || MemcpyInByVal))
     Chain = DAG.getCALLSEQ_START(Chain, NextStackOffset, 0, DL);
@@ -3309,19 +3322,19 @@ MipsTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
       break;
     case CCValAssign::SExtUpper:
       UseUpperBits = true;
-      LLVM_FALLTHROUGH;
+      [[fallthrough]];
     case CCValAssign::SExt:
       Arg = DAG.getNode(ISD::SIGN_EXTEND, DL, LocVT, Arg);
       break;
     case CCValAssign::ZExtUpper:
       UseUpperBits = true;
-      LLVM_FALLTHROUGH;
+      [[fallthrough]];
     case CCValAssign::ZExt:
       Arg = DAG.getNode(ISD::ZERO_EXTEND, DL, LocVT, Arg);
       break;
     case CCValAssign::AExtUpper:
       UseUpperBits = true;
-      LLVM_FALLTHROUGH;
+      [[fallthrough]];
     case CCValAssign::AExt:
       Arg = DAG.getNode(ISD::ANY_EXTEND, DL, LocVT, Arg);
       break;
@@ -3467,8 +3480,7 @@ MipsTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
   // Create the CALLSEQ_END node in the case of where it is not a call to
   // memcpy.
   if (!(MemcpyInByVal)) {
-    Chain = DAG.getCALLSEQ_END(Chain, NextStackOffsetVal,
-                               DAG.getIntPtrConstant(0, DL, true), InFlag, DL);
+    Chain = DAG.getCALLSEQ_END(Chain, NextStackOffset, 0, InFlag, DL);
     InFlag = Chain.getValue(1);
   }
 
@@ -3840,19 +3852,19 @@ MipsTargetLowering::LowerReturn(SDValue Chain, CallingConv::ID CallConv,
       break;
     case CCValAssign::AExtUpper:
       UseUpperBits = true;
-      LLVM_FALLTHROUGH;
+      [[fallthrough]];
     case CCValAssign::AExt:
       Val = DAG.getNode(ISD::ANY_EXTEND, DL, VA.getLocVT(), Val);
       break;
     case CCValAssign::ZExtUpper:
       UseUpperBits = true;
-      LLVM_FALLTHROUGH;
+      [[fallthrough]];
     case CCValAssign::ZExt:
       Val = DAG.getNode(ISD::ZERO_EXTEND, DL, VA.getLocVT(), Val);
       break;
     case CCValAssign::SExtUpper:
       UseUpperBits = true;
-      LLVM_FALLTHROUGH;
+      [[fallthrough]];
     case CCValAssign::SExt:
       Val = DAG.getNode(ISD::SIGN_EXTEND, DL, VA.getLocVT(), Val);
       break;
@@ -3971,7 +3983,7 @@ MipsTargetLowering::getSingleConstraintMatchWeight(
     break;
   case 'f': // FPU or MSA register
     if (Subtarget.hasMSA() && type->isVectorTy() &&
-        type->getPrimitiveSizeInBits().getFixedSize() == 128)
+        type->getPrimitiveSizeInBits().getFixedValue() == 128)
       weight = CW_Register;
     else if (type->isFloatTy())
       weight = CW_Register;
@@ -4026,7 +4038,7 @@ static std::pair<bool, bool> parsePhysicalReg(StringRef C, StringRef &Prefix,
 EVT MipsTargetLowering::getTypeForExtReturn(LLVMContext &Context, EVT VT,
                                             ISD::NodeType) const {
   bool Cond = !Subtarget.isABI_O32() && VT.getSizeInBits() == 32;
-  EVT MinVT = getRegisterType(Context, Cond ? MVT::i64 : MVT::i32);
+  EVT MinVT = getRegisterType(Cond ? MVT::i64 : MVT::i32);
   return VT.bitsLT(MinVT) ? MinVT : VT;
 }
 

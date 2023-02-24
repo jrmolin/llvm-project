@@ -8,12 +8,13 @@
 
 #include "LSPServer.h"
 
-#include "../lsp-server-support/Logging.h"
-#include "../lsp-server-support/Protocol.h"
-#include "../lsp-server-support/Transport.h"
 #include "PDLLServer.h"
+#include "Protocol.h"
+#include "mlir/Tools/lsp-server-support/Logging.h"
+#include "mlir/Tools/lsp-server-support/Transport.h"
 #include "llvm/ADT/FunctionExtras.h"
 #include "llvm/ADT/StringMap.h"
+#include <optional>
 
 #define DEBUG_TYPE "pdll-lsp-server"
 
@@ -62,7 +63,7 @@ struct LSPServer {
   // Hover
 
   void onHover(const TextDocumentPositionParams &params,
-               Callback<Optional<Hover>> reply);
+               Callback<std::optional<Hover>> reply);
 
   //===--------------------------------------------------------------------===//
   // Document Symbols
@@ -81,6 +82,18 @@ struct LSPServer {
 
   void onSignatureHelp(const TextDocumentPositionParams &params,
                        Callback<SignatureHelp> reply);
+
+  //===--------------------------------------------------------------------===//
+  // Inlay Hints
+
+  void onInlayHint(const InlayHintsParams &params,
+                   Callback<std::vector<InlayHint>> reply);
+
+  //===--------------------------------------------------------------------===//
+  // PDLL View Output
+
+  void onPDLLViewOutput(const PDLLViewOutputParams &params,
+                        Callback<std::optional<PDLLViewOutputResult>> reply);
 
   //===--------------------------------------------------------------------===//
   // Fields
@@ -109,15 +122,15 @@ void LSPServer::onInitialize(const InitializeParams &params,
       {"textDocumentSync",
        llvm::json::Object{
            {"openClose", true},
-           {"change", (int)TextDocumentSyncKind::Full},
+           {"change", (int)TextDocumentSyncKind::Incremental},
            {"save", true},
        }},
       {"completionProvider",
        llvm::json::Object{
            {"allCommitCharacters",
-            {" ", "\t", "(", ")", "[", "]", "{",  "}", "<",
-             ">", ":",  ";", ",", "+", "-", "/",  "*", "%",
-             "^", "&",  "#", "?", ".", "=", "\"", "'", "|"}},
+            {"\t", "(", ")", "[", "]", "{",  "}", "<", ">",
+             ":",  ";", ",", "+", "-", "/",  "*", "%", "^",
+             "&",  "#", "?", ".", "=", "\"", "'", "|"}},
            {"resolveProvider", false},
            {"triggerCharacters",
             {".", ">", "(", "{", ",", "<", ":", "[", " ", "\"", "/"}},
@@ -134,6 +147,7 @@ void LSPServer::onInitialize(const InitializeParams &params,
        }},
       {"hoverProvider", true},
       {"documentSymbolProvider", true},
+      {"inlayHintProvider", true},
   };
 
   llvm::json::Object result{
@@ -154,15 +168,15 @@ void LSPServer::onShutdown(const NoParams &, Callback<std::nullptr_t> reply) {
 void LSPServer::onDocumentDidOpen(const DidOpenTextDocumentParams &params) {
   PublishDiagnosticsParams diagParams(params.textDocument.uri,
                                       params.textDocument.version);
-  server.addOrUpdateDocument(params.textDocument.uri, params.textDocument.text,
-                             params.textDocument.version,
-                             diagParams.diagnostics);
+  server.addDocument(params.textDocument.uri, params.textDocument.text,
+                     params.textDocument.version, diagParams.diagnostics);
 
   // Publish any recorded diagnostics.
   publishDiagnostics(diagParams);
 }
 void LSPServer::onDocumentDidClose(const DidCloseTextDocumentParams &params) {
-  Optional<int64_t> version = server.removeDocument(params.textDocument.uri);
+  std::optional<int64_t> version =
+      server.removeDocument(params.textDocument.uri);
   if (!version)
     return;
 
@@ -173,15 +187,10 @@ void LSPServer::onDocumentDidClose(const DidCloseTextDocumentParams &params) {
       PublishDiagnosticsParams(params.textDocument.uri, *version));
 }
 void LSPServer::onDocumentDidChange(const DidChangeTextDocumentParams &params) {
-  // TODO: We currently only support full document updates, we should refactor
-  // to avoid this.
-  if (params.contentChanges.size() != 1)
-    return;
   PublishDiagnosticsParams diagParams(params.textDocument.uri,
                                       params.textDocument.version);
-  server.addOrUpdateDocument(
-      params.textDocument.uri, params.contentChanges.front().text,
-      params.textDocument.version, diagParams.diagnostics);
+  server.updateDocument(params.textDocument.uri, params.contentChanges,
+                        params.textDocument.version, diagParams.diagnostics);
 
   // Publish any recorded diagnostics.
   publishDiagnostics(diagParams);
@@ -218,7 +227,7 @@ void LSPServer::onDocumentLink(const DocumentLinkParams &params,
 // Hover
 
 void LSPServer::onHover(const TextDocumentPositionParams &params,
-                        Callback<Optional<Hover>> reply) {
+                        Callback<std::optional<Hover>> reply) {
   reply(server.findHover(params.textDocument.uri, params.position));
 }
 
@@ -246,6 +255,25 @@ void LSPServer::onCompletion(const CompletionParams &params,
 void LSPServer::onSignatureHelp(const TextDocumentPositionParams &params,
                                 Callback<SignatureHelp> reply) {
   reply(server.getSignatureHelp(params.textDocument.uri, params.position));
+}
+
+//===----------------------------------------------------------------------===//
+// Inlay Hints
+
+void LSPServer::onInlayHint(const InlayHintsParams &params,
+                            Callback<std::vector<InlayHint>> reply) {
+  std::vector<InlayHint> hints;
+  server.getInlayHints(params.textDocument.uri, params.range, hints);
+  reply(std::move(hints));
+}
+
+//===----------------------------------------------------------------------===//
+// PDLL ViewOutput
+
+void LSPServer::onPDLLViewOutput(
+    const PDLLViewOutputParams &params,
+    Callback<std::optional<PDLLViewOutputResult>> reply) {
+  reply(server.getPDLLViewOutput(params.uri, params.kind));
 }
 
 //===----------------------------------------------------------------------===//
@@ -295,6 +323,14 @@ LogicalResult mlir::lsp::runPdllLSPServer(PDLLServer &server,
   // Signature Help
   messageHandler.method("textDocument/signatureHelp", &lspServer,
                         &LSPServer::onSignatureHelp);
+
+  // Inlay Hints
+  messageHandler.method("textDocument/inlayHint", &lspServer,
+                        &LSPServer::onInlayHint);
+
+  // PDLL ViewOutput
+  messageHandler.method("pdll/viewOutput", &lspServer,
+                        &LSPServer::onPDLLViewOutput);
 
   // Diagnostics
   lspServer.publishDiagnostics =

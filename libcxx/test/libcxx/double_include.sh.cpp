@@ -69,7 +69,9 @@ END-SCRIPT
 #include <complex.h>
 #include <concepts>
 #include <condition_variable>
-#include <coroutine>
+#if (defined(__cpp_impl_coroutine) && __cpp_impl_coroutine >= 201902L) || (defined(__cpp_coroutines) && __cpp_coroutines >= 201703L)
+#   include <coroutine>
+#endif
 #include <csetjmp>
 #include <csignal>
 #include <cstdarg>
@@ -93,6 +95,7 @@ END-SCRIPT
 #include <errno.h>
 #include <exception>
 #include <execution>
+#include <expected>
 #include <fenv.h>
 #if !defined(_LIBCPP_HAS_NO_FILESYSTEM_LIBRARY)
 #   include <filesystem>
@@ -100,7 +103,7 @@ END-SCRIPT
 #include <float.h>
 #include <format>
 #include <forward_list>
-#if !defined(_LIBCPP_HAS_NO_LOCALIZATION)
+#if !defined(_LIBCPP_HAS_NO_LOCALIZATION) && !defined(_LIBCPP_HAS_NO_FSTREAM)
 #   include <fstream>
 #endif
 #include <functional>
@@ -138,6 +141,7 @@ END-SCRIPT
 #include <map>
 #include <math.h>
 #include <memory>
+#include <memory_resource>
 #if !defined(_LIBCPP_HAS_NO_THREADS)
 #   include <mutex>
 #endif
@@ -164,6 +168,7 @@ END-SCRIPT
 #if !defined(_LIBCPP_HAS_NO_THREADS)
 #   include <shared_mutex>
 #endif
+#include <source_location>
 #include <span>
 #if !defined(_LIBCPP_HAS_NO_LOCALIZATION)
 #   include <sstream>
@@ -210,18 +215,15 @@ END-SCRIPT
 #if !defined(_LIBCPP_HAS_NO_WIDE_CHARACTERS)
 #   include <wctype.h>
 #endif
-#include <experimental/algorithm>
-#if !defined(_LIBCPP_HAS_NO_EXPERIMENTAL_COROUTINES)
-#   include <experimental/coroutine>
-#endif
 #if __cplusplus >= 201103L
 #   include <experimental/deque>
 #endif
 #if __cplusplus >= 201103L
 #   include <experimental/forward_list>
 #endif
-#include <experimental/functional>
-#include <experimental/iterator>
+#if __cplusplus >= 201103L
+#   include <experimental/iterator>
+#endif
 #if __cplusplus >= 201103L
 #   include <experimental/list>
 #endif
@@ -231,25 +233,33 @@ END-SCRIPT
 #if __cplusplus >= 201103L
 #   include <experimental/memory_resource>
 #endif
-#include <experimental/propagate_const>
+#if __cplusplus >= 201103L
+#   include <experimental/propagate_const>
+#endif
 #if !defined(_LIBCPP_HAS_NO_LOCALIZATION) && __cplusplus >= 201103L
 #   include <experimental/regex>
 #endif
 #if __cplusplus >= 201103L
 #   include <experimental/set>
 #endif
-#include <experimental/simd>
+#if __cplusplus >= 201103L
+#   include <experimental/simd>
+#endif
 #if __cplusplus >= 201103L
 #   include <experimental/string>
 #endif
-#include <experimental/type_traits>
+#if __cplusplus >= 201103L
+#   include <experimental/type_traits>
+#endif
 #if __cplusplus >= 201103L
 #   include <experimental/unordered_map>
 #endif
 #if __cplusplus >= 201103L
 #   include <experimental/unordered_set>
 #endif
-#include <experimental/utility>
+#if __cplusplus >= 201103L
+#   include <experimental/utility>
+#endif
 #if __cplusplus >= 201103L
 #   include <experimental/vector>
 #endif

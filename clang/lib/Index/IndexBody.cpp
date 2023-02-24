@@ -202,7 +202,7 @@ public:
   }
 
   bool VisitDesignatedInitExpr(DesignatedInitExpr *E) {
-    for (DesignatedInitExpr::Designator &D : llvm::reverse(E->designators())) {
+    for (Designator &D : llvm::reverse(E->designators())) {
       if (D.isFieldDesignator() && D.getField())
         return IndexCtx.handleReference(D.getField(), D.getFieldLoc(), Parent,
                                         ParentDC, SymbolRoleSet(), {}, E);
@@ -416,7 +416,7 @@ public:
     };
 
     auto visitSyntacticDesignatedInitExpr = [&](DesignatedInitExpr *E) -> bool {
-      for (DesignatedInitExpr::Designator &D : llvm::reverse(E->designators())) {
+      for (Designator &D : llvm::reverse(E->designators())) {
         if (D.isFieldDesignator() && D.getField())
           return IndexCtx.handleReference(D.getField(), D.getFieldLoc(),
                                           Parent, ParentDC, SymbolRoleSet(),
@@ -468,7 +468,7 @@ public:
     return true;
   }
 
-  bool VisitUnresolvedLookupExpr(UnresolvedLookupExpr *E) {
+  bool VisitOverloadExpr(OverloadExpr *E) {
     SmallVector<SymbolRelation, 4> Relations;
     SymbolRoleSet Roles = getRolesForRef(E, Relations);
     for (auto *D : E->decls())

@@ -19,25 +19,71 @@
 #include "mlir/IR/OperationSupport.h"
 #include "mlir/IR/Region.h"
 #include "llvm/ADT/Twine.h"
+#include <optional>
 
 namespace mlir {
-/// Operation is a basic unit of execution within MLIR. Operations can
-/// be nested within `Region`s held by other operations effectively forming a
-/// tree. Child operations are organized into operation blocks represented by a
-/// 'Block' class.
+/// Operation is the basic unit of execution within MLIR.
+///
+/// The following documentation are recommended to understand this class:
+/// - https://mlir.llvm.org/docs/LangRef/#operations
+/// - https://mlir.llvm.org/docs/Tutorials/UnderstandingTheIRStructure/
+///
+/// An Operation is defined first by its name, which is a unique string. The
+/// name is interpreted so that if it contains a '.' character, the part before
+/// is the dialect name this operation belongs to, and everything that follows
+/// is this operation name within the dialect.
+///
+/// An Operation defines zero or more SSA `Value` that we refer to as the
+/// Operation results. This array of Value is actually stored in memory before
+/// the Operation itself in reverse order. That is for an Operation with 3
+/// results we allocate the following memory layout:
+///
+///  [Result2, Result1, Result0, Operation]
+///                              ^ this is where `Operation*` pointer points to.
+///
+/// A consequence of this is that this class must be heap allocated, which is
+/// handled by the various `create` methods. Each result contains:
+///  - one pointer to the first use (see `OpOperand`)
+///  - the type of the SSA Value this result defines.
+///  - the index for this result in the array.
+/// The results are defined as subclass of `ValueImpl`, and more precisely as
+/// the only two subclasses of `OpResultImpl`: `InlineOpResult` and
+/// `OutOfLineOpResult`. The former is used for the first 5 results and the
+/// latter for the subsequent ones. They differ in how they store their index:
+/// the first 5 results only need 3 bits and thus are packed with the Type
+/// pointer, while the subsequent one have an extra `unsigned` value and thus
+/// need more space.
+///
+/// An Operation also has zero or more operands: these are uses of SSA Value,
+/// which can be the results of other operations or Block arguments. Each of
+/// these uses is an instance of `OpOperand`. This optional array is initially
+/// tail allocated with the operation class itself, but can be dynamically moved
+/// out-of-line in a dynamic allocation as needed.
+///
+/// An Operation may contain optionally one or multiple Regions, stored in a
+/// tail allocated array. Each `Region` is a list of Blocks. Each `Block` is
+/// itself a list of Operations. This structure is effectively forming a tree.
+///
+/// Some operations like branches also refer to other Block, in which case they
+/// would have an array of `BlockOperand`.
+///
+/// Finally an Operation also contain an optional `DictionaryAttr`, a Location,
+/// and a pointer to its parent Block (if any).
 class alignas(8) Operation final
     : public llvm::ilist_node_with_parent<Operation, Block>,
       private llvm::TrailingObjects<Operation, detail::OperandStorage,
                                     BlockOperand, Region, OpOperand> {
 public:
-  /// Create a new Operation with the specific fields.
+  /// Create a new Operation with the specific fields. This constructor
+  /// populates the provided attribute list with default attributes if
+  /// necessary.
   static Operation *create(Location location, OperationName name,
                            TypeRange resultTypes, ValueRange operands,
-                           ArrayRef<NamedAttribute> attributes,
-                           BlockRange successors, unsigned numRegions);
+                           NamedAttrList &&attributes, BlockRange successors,
+                           unsigned numRegions);
 
-  /// Overload of create that takes an existing DictionaryAttr to avoid
-  /// unnecessarily uniquing a list of attributes.
+  /// Create a new Operation with the specific fields. This constructor uses an
+  /// existing attribute dictionary to avoid uniquing a list of attributes.
   static Operation *create(Location location, OperationName name,
                            TypeRange resultTypes, ValueRange operands,
                            DictionaryAttr attributes, BlockRange successors,
@@ -49,7 +95,7 @@ public:
   /// Create a new Operation with the specific fields.
   static Operation *create(Location location, OperationName name,
                            TypeRange resultTypes, ValueRange operands,
-                           DictionaryAttr attributes,
+                           NamedAttrList &&attributes,
                            BlockRange successors = {},
                            RegionRange regions = {});
 
@@ -57,8 +103,8 @@ public:
   OperationName getName() { return name; }
 
   /// If this operation has a registered operation description, return it.
-  /// Otherwise return None.
-  Optional<RegisteredOperationName> getRegisteredInfo() {
+  /// Otherwise return std::nullopt.
+  std::optional<RegisteredOperationName> getRegisteredInfo() {
     return getName().getRegisteredInfo();
   }
 
@@ -131,7 +177,7 @@ public:
   /// as top level function operations, is therefore always safe. Using the
   /// mapper, it is possible to avoid adding uses to outside operands by
   /// remapping them to 'Value's owned by the caller thread.
-  Operation *clone(BlockAndValueMapping &mapper,
+  Operation *clone(IRMapping &mapper,
                    CloneOptions options = CloneOptions::all());
   Operation *clone(CloneOptions options = CloneOptions::all());
 
@@ -140,7 +186,7 @@ public:
   /// original one, but they will be left empty.
   /// Operands are remapped using `mapper` (if present), and `mapper` is updated
   /// to contain the results.
-  Operation *cloneWithoutRegions(BlockAndValueMapping &mapper);
+  Operation *cloneWithoutRegions(IRMapping &mapper);
 
   /// Create a partial copy of this operation without traversing into attached
   /// regions. The new operation will have the same number of regions as the
@@ -172,7 +218,8 @@ public:
   Operation *getParentOp() { return block ? block->getParentOp() : nullptr; }
 
   /// Return the closest surrounding parent operation that is of type 'OpTy'.
-  template <typename OpTy> OpTy getParentOfType() {
+  template <typename OpTy>
+  OpTy getParentOfType() {
     auto *op = this;
     while ((op = op->getParentOp()))
       if (auto parentOp = dyn_cast<OpTy>(op))
@@ -208,6 +255,15 @@ public:
   template <typename ValuesT>
   void replaceAllUsesWith(ValuesT &&values) {
     getResults().replaceAllUsesWith(std::forward<ValuesT>(values));
+  }
+
+  /// Replace uses of results of this operation with the provided `values` if
+  /// the given callback returns true.
+  template <typename ValuesT>
+  void replaceUsesWithIf(ValuesT &&values,
+                         function_ref<bool(OpOperand &)> shouldReplace) {
+    getResults().replaceUsesWithIf(std::forward<ValuesT>(values),
+                                   shouldReplace);
   }
 
   /// Destroys this operation and its subclass data.
@@ -246,7 +302,7 @@ public:
   /// take O(N) where N is the number of operations within the parent block.
   bool isBeforeInBlock(Operation *other);
 
-  void print(raw_ostream &os, const OpPrintingFlags &flags = llvm::None);
+  void print(raw_ostream &os, const OpPrintingFlags &flags = std::nullopt);
   void print(raw_ostream &os, AsmState &state);
   void dump();
 
@@ -466,6 +522,13 @@ public:
     setAttrs(attrs.getDictionary(getContext()));
   }
 
+  /// Sets default attributes on unset attributes.
+  void populateDefaultAttrs() {
+    NamedAttrList attrs(getAttrDictionary());
+    name.populateDefaultAttrs(attrs);
+    setAttrs(attrs.getDictionary(getContext()));
+  }
+
   //===--------------------------------------------------------------------===//
   // Blocks
   //===--------------------------------------------------------------------===//
@@ -475,6 +538,10 @@ public:
 
   /// Returns the regions held by this operation.
   MutableArrayRef<Region> getRegions() {
+    // Check the count first, as computing the trailing objects can be slow.
+    if (numRegions == 0)
+      return MutableArrayRef<Region>();
+
     auto *regions = getTrailingObjects<Region>();
     return {regions, numRegions};
   }
@@ -521,14 +588,16 @@ public:
 
   /// Returns true if the operation was registered with a particular trait, e.g.
   /// hasTrait<OperandsAreSignlessIntegerLike>().
-  template <template <typename T> class Trait> bool hasTrait() {
+  template <template <typename T> class Trait>
+  bool hasTrait() {
     return name.hasTrait<Trait>();
   }
 
   /// Returns true if the operation *might* have the provided trait. This
   /// means that either the operation is unregistered, or it was registered with
   /// the provide trait.
-  template <template <typename T> class Trait> bool mightHaveTrait() {
+  template <template <typename T> class Trait>
+  bool mightHaveTrait() {
     return name.mightHaveTrait<Trait>();
   }
 
@@ -538,9 +607,10 @@ public:
 
   /// Walk the operation by calling the callback for each nested operation
   /// (including this one), block or region, depending on the callback provided.
-  /// Regions, blocks and operations at the same nesting level are visited in
-  /// lexicographical order. The walk order for enclosing regions, blocks and
-  /// operations with respect to their nested ones is specified by 'Order'
+  /// The order in which regions, blocks and operations at the same nesting
+  /// level are visited (e.g., lexicographical or reverse lexicographical order)
+  /// is determined by 'Iterator'. The walk order for enclosing regions, blocks
+  /// and operations with respect to their nested ones is specified by 'Order'
   /// (post-order by default). A callback on a block or operation is allowed to
   /// erase that block or operation if either:
   ///   * the walk is in post-order, or
@@ -562,12 +632,13 @@ public:
   ///           return WalkResult::interrupt();
   ///         return WalkResult::advance();
   ///       });
-  template <WalkOrder Order = WalkOrder::PostOrder, typename FnT,
+  template <WalkOrder Order = WalkOrder::PostOrder,
+            typename Iterator = ForwardIterator, typename FnT,
             typename RetT = detail::walkResultType<FnT>>
-  typename std::enable_if<
-      llvm::function_traits<std::decay_t<FnT>>::num_args == 1, RetT>::type
+  std::enable_if_t<llvm::function_traits<std::decay_t<FnT>>::num_args == 1,
+                   RetT>
   walk(FnT &&callback) {
-    return detail::walk<Order>(this, std::forward<FnT>(callback));
+    return detail::walk<Order, Iterator>(this, std::forward<FnT>(callback));
   }
 
   /// Generic walker with a stage aware callback. Walk the operation by calling
@@ -592,8 +663,8 @@ public:
   ///         return WalkResult::advance();
   ///       });
   template <typename FnT, typename RetT = detail::walkResultType<FnT>>
-  typename std::enable_if<
-      llvm::function_traits<std::decay_t<FnT>>::num_args == 2, RetT>::type
+  std::enable_if_t<llvm::function_traits<std::decay_t<FnT>>::num_args == 2,
+                   RetT>
   walk(FnT &&callback) {
     return detail::walk(this, std::forward<FnT>(callback));
   }
@@ -746,6 +817,19 @@ private:
   /// model.
   Block *getParent() const { return block; }
 
+  /// Expose a few methods explicitly for the debugger to call for
+  /// visualization.
+#ifndef NDEBUG
+  LLVM_DUMP_METHOD operand_range debug_getOperands() { return getOperands(); }
+  LLVM_DUMP_METHOD result_range debug_getResults() { return getResults(); }
+  LLVM_DUMP_METHOD SuccessorRange debug_getSuccessors() {
+    return getSuccessors();
+  }
+  LLVM_DUMP_METHOD MutableArrayRef<Region> debug_getRegions() {
+    return getRegions();
+  }
+#endif
+
   /// The operation block that contains this operation.
   Block *block = nullptr;
 
@@ -804,34 +888,51 @@ inline raw_ostream &operator<<(raw_ostream &os, const Operation &op) {
 } // namespace mlir
 
 namespace llvm {
-/// Provide isa functionality for operation casts.
-template <typename T> struct isa_impl<T, ::mlir::Operation> {
-  static inline bool doit(const ::mlir::Operation &op) {
-    return T::classof(const_cast<::mlir::Operation *>(&op));
-  }
+/// Cast from an (const) Operation * to a derived operation type.
+template <typename T>
+struct CastInfo<T, ::mlir::Operation *>
+    : public ValueFromPointerCast<T, ::mlir::Operation,
+                                  CastInfo<T, ::mlir::Operation *>> {
+  static bool isPossible(::mlir::Operation *op) { return T::classof(op); }
 };
+template <typename T>
+struct CastInfo<T, const ::mlir::Operation *>
+    : public ConstStrippingForwardingCast<T, const ::mlir::Operation *,
+                                          CastInfo<T, ::mlir::Operation *>> {};
 
-/// Allow isa<Operation *> on operations.
-template <> struct isa_impl<::mlir::Operation *, ::mlir::Operation> {
-  static inline bool doit(const ::mlir::Operation &op) { return true; }
+/// Cast from an (const) Operation & to a derived operation type.
+template <typename T>
+struct CastInfo<T, ::mlir::Operation>
+    : public NullableValueCastFailed<T>,
+      public DefaultDoCastIfPossible<T, ::mlir::Operation &,
+                                     CastInfo<T, ::mlir::Operation>> {
+  // Provide isPossible here because here we have the const-stripping from
+  // ConstStrippingCast.
+  static bool isPossible(::mlir::Operation &val) { return T::classof(&val); }
+  static T doCast(::mlir::Operation &val) { return T(&val); }
 };
+template <typename T>
+struct CastInfo<T, const ::mlir::Operation>
+    : public ConstStrippingForwardingCast<T, const ::mlir::Operation,
+                                          CastInfo<T, ::mlir::Operation>> {};
 
-/// Provide specializations for operation casts as the resulting T is value
-/// typed.
-template <typename T> struct cast_retty_impl<T, ::mlir::Operation *> {
-  using ret_type = T;
+/// Cast (const) Operation * to itself. This is helpful to avoid SFINAE in
+/// templated implementations that should work on both base and derived
+/// operation types.
+template <>
+struct CastInfo<::mlir::Operation *, ::mlir::Operation *>
+    : public NullableValueCastFailed<::mlir::Operation *>,
+      public DefaultDoCastIfPossible<
+          ::mlir::Operation *, ::mlir::Operation *,
+          CastInfo<::mlir::Operation *, ::mlir::Operation *>> {
+  static bool isPossible(::mlir::Operation *op) { return true; }
+  static ::mlir::Operation *doCast(::mlir::Operation *op) { return op; }
 };
-template <typename T> struct cast_retty_impl<T, ::mlir::Operation> {
-  using ret_type = T;
-};
-template <class T>
-struct cast_convert_val<T, ::mlir::Operation, ::mlir::Operation> {
-  static T doit(::mlir::Operation &val) { return T(&val); }
-};
-template <class T>
-struct cast_convert_val<T, ::mlir::Operation *, ::mlir::Operation *> {
-  static T doit(::mlir::Operation *val) { return T(val); }
-};
+template <>
+struct CastInfo<const ::mlir::Operation *, const ::mlir::Operation *>
+    : public ConstStrippingForwardingCast<
+          const ::mlir::Operation *, const ::mlir::Operation *,
+          CastInfo<::mlir::Operation *, ::mlir::Operation *>> {};
 } // namespace llvm
 
 #endif // MLIR_IR_OPERATION_H

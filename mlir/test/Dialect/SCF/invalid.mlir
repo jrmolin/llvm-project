@@ -131,7 +131,7 @@ func.func @parallel_body_arguments_wrong_type(
   "scf.parallel"(%arg0, %arg1, %arg2) ({
     ^bb0(%i0: f32):
       scf.yield
-  }) {operand_segment_sizes = dense<[1, 1, 1, 0]>: vector<4xi32>}: (index, index, index) -> ()
+  }) {operand_segment_sizes = array<i32: 1, 1, 1, 0>}: (index, index, index) -> ()
   return
 }
 
@@ -143,7 +143,7 @@ func.func @parallel_body_wrong_number_of_arguments(
   "scf.parallel"(%arg0, %arg1, %arg2) ({
     ^bb0(%i0: index, %i1: index):
       scf.yield
-  }) {operand_segment_sizes = dense<[1, 1, 1, 0]>: vector<4xi32>}: (index, index, index) -> ()
+  }) {operand_segment_sizes = array<i32: 1, 1, 1, 0>}: (index, index, index) -> ()
   return
 }
 
@@ -199,7 +199,7 @@ func.func @parallel_more_results_than_reduces(
 
 func.func @parallel_more_results_than_initial_values(
     %arg0 : index, %arg1: index, %arg2: index) {
-  // expected-error@+1 {{expects number of results: 1 to be the same as number of initial values: 0}}
+  // expected-error@+1 {{'scf.parallel' 0 operands present, but expected 1}}
   %res = scf.parallel (%i0) = (%arg0) to (%arg1) step (%arg2) -> f32 {
     scf.reduce(%arg0) : index {
       ^bb0(%lhs: index, %rhs: index):
@@ -428,7 +428,7 @@ func.func @parallel_invalid_yield(
 
 func.func @yield_invalid_parent_op() {
   "my.op"() ({
-   // expected-error@+1 {{'scf.yield' op expects parent op to be one of 'scf.execute_region, scf.for, scf.if, scf.parallel, scf.while'}}
+   // expected-error@+1 {{'scf.yield' op expects parent op to be one of 'scf.execute_region, scf.for, scf.if, scf.index_switch, scf.parallel, scf.while'}}
    scf.yield
   }) : () -> ()
   return
@@ -460,6 +460,26 @@ func.func @while_bad_terminator() {
 
 // -----
 
+func.func @while_empty_region() {
+  // expected-error@+1 {{'scf.while' op region #0 ('before') failed to verify constraint: region with 1 blocks}}
+  scf.while : () -> () {
+  } do {
+  }
+}
+
+// -----
+
+func.func @while_empty_block() {
+  // expected-error@+1 {{expects the 'before' region to terminate with 'scf.condition'}}
+  scf.while : () -> () {
+   ^bb0:
+  } do {
+   ^bb0:
+  }
+}
+
+// -----
+
 func.func @while_cross_region_type_mismatch() {
   %true = arith.constant true
   // expected-error@+1 {{'scf.while' op  region control flow edge from Region #0 to Region #1: source has 0 operands, but target successor needs 1}}
@@ -476,7 +496,7 @@ func.func @while_cross_region_type_mismatch() {
 func.func @while_cross_region_type_mismatch() {
   %true = arith.constant true
   // expected-error@+1 {{'scf.while' op  along control flow edge from Region #0 to Region #1: source type #0 'i1' should match input type #0 'i32'}}
-  scf.while : () -> () {
+  %0 = scf.while : () -> (i1) {
     scf.condition(%true) %true : i1
   } do {
   ^bb0(%arg0: i32):
@@ -520,3 +540,148 @@ func.func @execute_region() {
   }) : () -> ()
   return
 }
+
+// -----
+
+func.func @wrong_num_results(%in: tensor<100xf32>, %out: tensor<100xf32>) {
+  %c1 = arith.constant 1 : index
+  %num_threads = arith.constant 100 : index
+
+  // expected-error @+1 {{1 operands present, but expected 2}}
+  %result:2 = scf.forall (%thread_idx) in (%num_threads) shared_outs(%o = %out) -> (tensor<100xf32>, tensor<100xf32>) {
+      %1 = tensor.extract_slice %in[%thread_idx][1][1] : tensor<100xf32> to tensor<1xf32>
+      scf.forall.in_parallel {
+        tensor.parallel_insert_slice %1 into %o[%thread_idx][1][1] :
+          tensor<1xf32> into tensor<100xf32>
+      }
+  }
+  return
+}
+
+// -----
+
+func.func @invalid_insert_dest(%in: tensor<100xf32>, %out: tensor<100xf32>) {
+  %c1 = arith.constant 1 : index
+  %num_threads = arith.constant 100 : index
+
+  %result = scf.forall (%thread_idx) in (%num_threads) shared_outs(%o = %out) -> (tensor<100xf32>) {
+      %1 = tensor.extract_slice %in[%thread_idx][1][1] : tensor<100xf32> to tensor<1xf32>
+      scf.forall.in_parallel {
+        // expected-error @+1 {{may only insert into an output block argument}}
+        tensor.parallel_insert_slice %1 into %out[%thread_idx][1][1] :
+          tensor<1xf32> into tensor<100xf32>
+      }
+  }
+  return
+}
+
+// -----
+
+func.func @wrong_terminator_op(%in: tensor<100xf32>, %out: tensor<100xf32>) {
+  %c1 = arith.constant 1 : index
+  %num_threads = arith.constant 100 : index
+
+  %result = scf.forall (%thread_idx) in (%num_threads) shared_outs(%o = %out) -> (tensor<100xf32>) {
+      %1 = tensor.extract_slice %in[%thread_idx][1][1] : tensor<100xf32> to tensor<1xf32>
+      // expected-error @+1 {{expected only tensor.parallel_insert_slice ops}}
+      scf.forall.in_parallel {
+        tensor.parallel_insert_slice %1 into %o[%thread_idx][1][1] :
+          tensor<1xf32> into tensor<100xf32>
+        %0 = arith.constant 1: index
+      }
+  }
+  return
+}
+
+// -----
+
+func.func @mismatched_mapping(%x: memref<2 x 32 x f32>, %y: memref<2 x 32 x f32>, %t: memref<32 x f32>, %alpha : f32, %stream : !gpu.async.token) -> memref<2 x 32 x f32> {
+  %one = arith.constant 1 : index
+  %c65535 = arith.constant 65535 : index
+  // expected-error @below {{'scf.forall' op mapping attribute size must match op rank}}
+  scf.forall (%i, %j) in (%c65535, %c65535) {
+      %4 = memref.load %x[%i, %j] : memref<2 x 32 x f32>
+      %5 = memref.load %y[%i, %j] : memref<2 x 32 x f32>
+      %6 = math.fma %alpha, %4, %5 : f32
+      memref.store %6, %y[%i, %j] : memref<2 x 32 x f32>
+  }  { mapping = [#gpu.block<x>, #gpu.block<y>, #gpu.block<z>] }
+  return %y : memref<2 x 32 x f32>
+}
+
+// -----
+
+func.func @switch_wrong_case_count(%arg0: index) {
+  // expected-error @below {{'scf.index_switch' op has 0 case regions but 1 case values}}
+  "scf.index_switch"(%arg0) ({
+    scf.yield
+  }) {cases = array<i64: 1>} : (index) -> ()
+  return
+}
+
+// -----
+
+func.func @switch_duplicate_case(%arg0: index) {
+  // expected-error @below {{'scf.index_switch' op has duplicate case value: 0}}
+  scf.index_switch %arg0
+  case 0 {
+    scf.yield
+  }
+  case 0 {
+    scf.yield
+  }
+  default {
+    scf.yield
+  }
+  return
+}
+
+// -----
+
+func.func @switch_wrong_types(%arg0: index) {
+  // expected-error @below {{'scf.index_switch' op expected each region to return 0 values, but default region returns 1}}
+  scf.index_switch %arg0
+  default {
+    // expected-note @below {{see yield operation here}}
+    scf.yield %arg0 : index
+  }
+  return
+}
+
+// -----
+
+func.func @switch_wrong_types(%arg0: index, %arg1: i32) {
+  // expected-error @below {{'scf.index_switch' op expected result #0 of each region to be 'index'}}
+  scf.index_switch %arg0 -> index
+  case 0 {
+    // expected-note @below {{case region #0 returns 'i32' here}}
+    scf.yield %arg1 : i32
+  }
+  default {
+    scf.yield %arg0 : index
+  }
+  return
+}
+
+// -----
+
+func.func @switch_missing_terminator(%arg0: index, %arg1: i32) {
+  // expected-error @below {{'scf.index_switch' op expected region to end with scf.yield, but got func.return}}
+  "scf.index_switch"(%arg0) ({
+    "scf.yield"() : () -> ()
+  }, {
+    return
+  }) {cases = array<i64: 1>} : (index) -> ()
+}
+
+// -----
+
+func.func @parallel_missing_terminator(%0 : index) {
+  // expected-error @below {{'scf.parallel' op expects body to terminate with 'scf.yield'}}
+  "scf.parallel"(%0, %0, %0) ({
+  ^bb0(%arg1: index):
+    // expected-note @below {{terminator here}}
+    %2 = "arith.constant"() {value = 1.000000e+00 : f32} : () -> f32
+  }) {operand_segment_sizes = array<i32: 1, 1, 1, 0>} : (index, index, index) -> ()
+  return
+}
+

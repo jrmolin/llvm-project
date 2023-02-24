@@ -15,15 +15,15 @@
 #include "clang/Lex/HeaderSearch.h"
 #include "clang/Lex/PPCallbacks.h"
 #include "clang/Lex/Preprocessor.h"
+#include "clang/Tooling/Inclusions/HeaderAnalysis.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Path.h"
 #include <cstring>
+#include <optional>
 
 namespace clang {
 namespace clangd {
-
-const char IWYUPragmaKeep[] = "// IWYU pragma: keep";
-const char IWYUPragmaExport[] = "// IWYU pragma: export";
 
 class IncludeStructure::RecordHeaders : public PPCallbacks,
                                         public CommentHandler {
@@ -37,7 +37,7 @@ public:
   void InclusionDirective(SourceLocation HashLoc, const Token &IncludeTok,
                           llvm::StringRef FileName, bool IsAngled,
                           CharSourceRange /*FilenameRange*/,
-                          Optional<FileEntryRef> File,
+                          OptionalFileEntryRef File,
                           llvm::StringRef /*SearchPath*/,
                           llvm::StringRef /*RelativePath*/,
                           const clang::Module * /*Imported*/,
@@ -74,6 +74,8 @@ public:
               IDs.push_back(HID);
           }
       }
+      Out->MainFileIncludesBySpelling.try_emplace(Inc.Written)
+          .first->second.push_back(Out->MainFileIncludes.size() - 1);
     }
 
     // Record include graph (not just for main-file includes)
@@ -112,12 +114,10 @@ public:
         // isSelfContainedHeader only returns true once the full header-guard
         // structure has been seen, i.e. when exiting the *outer* copy of the
         // file. So last result wins.
-        if (isSelfContainedHeader(FE, PrevFID, SM, HeaderInfo))
-          Out->NonSelfContained.erase(
-              *Out->getID(SM.getFileEntryForID(PrevFID)));
+        if (tooling::isSelfContainedHeader(FE, SM, HeaderInfo))
+          Out->NonSelfContained.erase(*Out->getID(FE));
         else
-          Out->NonSelfContained.insert(
-              *Out->getID(SM.getFileEntryForID(PrevFID)));
+          Out->NonSelfContained.insert(*Out->getID(FE));
       }
       break;
     }
@@ -127,31 +127,44 @@ public:
     }
   }
 
-  // Given:
-  //
-  // #include "foo.h"
-  // #include "bar.h" // IWYU pragma: keep
-  //
-  // The order in which the callbacks will be triggered:
-  //
-  // 1. InclusionDirective("foo.h")
-  // 2. HandleComment("// IWYU pragma: keep")
-  // 3. InclusionDirective("bar.h")
-  //
-  // HandleComment will store the last location of "IWYU pragma: keep" (or
-  // export) comment in the main file, so that when InclusionDirective is
-  // called, it will know that the next inclusion is behind the IWYU pragma.
   bool HandleComment(Preprocessor &PP, SourceRange Range) override {
-    if (!inMainFile() || Range.getBegin().isMacroID())
+    auto Pragma =
+        tooling::parseIWYUPragma(SM.getCharacterData(Range.getBegin()));
+    if (!Pragma)
       return false;
-    bool Err = false;
-    llvm::StringRef Text = SM.getCharacterData(Range.getBegin(), &Err);
-    if (Err && !Text.consume_front(IWYUPragmaKeep) &&
-        !Text.consume_front(IWYUPragmaExport))
-      return false;
-    unsigned Offset = SM.getFileOffset(Range.getBegin());
-    LastPragmaKeepInMainFileLine =
-        SM.getLineNumber(SM.getFileID(Range.getBegin()), Offset) - 1;
+
+    if (inMainFile()) {
+      // Given:
+      //
+      // #include "foo.h"
+      // #include "bar.h" // IWYU pragma: keep
+      //
+      // The order in which the callbacks will be triggered:
+      //
+      // 1. InclusionDirective("foo.h")
+      // 2. handleCommentInMainFile("// IWYU pragma: keep")
+      // 3. InclusionDirective("bar.h")
+      //
+      // This code stores the last location of "IWYU pragma: keep" (or export)
+      // comment in the main file, so that when InclusionDirective is called, it
+      // will know that the next inclusion is behind the IWYU pragma.
+      // FIXME: Support "IWYU pragma: begin_exports" and "IWYU pragma:
+      // end_exports".
+      if (!Pragma->startswith("export") && !Pragma->startswith("keep"))
+        return false;
+      unsigned Offset = SM.getFileOffset(Range.getBegin());
+      LastPragmaKeepInMainFileLine =
+          SM.getLineNumber(SM.getMainFileID(), Offset) - 1;
+    } else {
+      // Memorize headers that have export pragmas in them. Include Cleaner
+      // does not support them properly yet, so they will be not marked as
+      // unused.
+      // FIXME: Once IncludeCleaner supports export pragmas, remove this.
+      if (!Pragma->startswith("export") && !Pragma->startswith("begin_exports"))
+        return false;
+      Out->HasIWYUExport.insert(
+          *Out->getID(SM.getFileEntryForID(SM.getFileID(Range.getBegin()))));
+    }
     return false;
   }
 
@@ -202,7 +215,7 @@ llvm::Expected<HeaderFile> toHeaderFile(llvm::StringRef Header,
   return HeaderFile{std::move(*Resolved), /*Verbatim=*/false};
 }
 
-llvm::SmallVector<llvm::StringRef, 1> getRankedIncludes(const Symbol &Sym) {
+llvm::SmallVector<SymbolInclude, 1> getRankedIncludes(const Symbol &Sym) {
   auto Includes = Sym.IncludeHeaders;
   // Sort in descending order by reference count and header length.
   llvm::sort(Includes, [](const Symbol::IncludeHeaderWithReferences &LHS,
@@ -211,9 +224,9 @@ llvm::SmallVector<llvm::StringRef, 1> getRankedIncludes(const Symbol &Sym) {
       return LHS.IncludeHeader.size() < RHS.IncludeHeader.size();
     return LHS.References > RHS.References;
   });
-  llvm::SmallVector<llvm::StringRef, 1> Headers;
+  llvm::SmallVector<SymbolInclude, 1> Headers;
   for (const auto &Include : Includes)
-    Headers.push_back(Include.IncludeHeader);
+    Headers.push_back({Include.IncludeHeader, Include.supportedDirectives()});
   return Headers;
 }
 
@@ -225,7 +238,7 @@ void IncludeStructure::collect(const CompilerInstance &CI) {
   CI.getPreprocessor().addPPCallbacks(std::move(Collector));
 }
 
-llvm::Optional<IncludeStructure::HeaderID>
+std::optional<IncludeStructure::HeaderID>
 IncludeStructure::getID(const FileEntry *Entry) const {
   // HeaderID of the main file is always 0;
   if (Entry == MainFileEntry) {
@@ -233,12 +246,11 @@ IncludeStructure::getID(const FileEntry *Entry) const {
   }
   auto It = UIDToIndex.find(Entry->getUniqueID());
   if (It == UIDToIndex.end())
-    return llvm::None;
+    return std::nullopt;
   return It->second;
 }
 
-IncludeStructure::HeaderID
-IncludeStructure::getOrCreateID(FileEntryRef Entry) {
+IncludeStructure::HeaderID IncludeStructure::getOrCreateID(FileEntryRef Entry) {
   // Main file's FileEntry was not known at IncludeStructure creation time.
   if (&Entry.getFileEntry() == MainFileEntry) {
     if (RealPathNames.front().empty())
@@ -285,6 +297,14 @@ IncludeStructure::includeDepth(HeaderID Root) const {
   return Result;
 }
 
+llvm::SmallVector<const Inclusion *>
+IncludeStructure::mainFileIncludesWithSpelling(llvm::StringRef Spelling) const {
+  llvm::SmallVector<const Inclusion *> Includes;
+  for (auto Idx : MainFileIncludesBySpelling.lookup(Spelling))
+    Includes.push_back(&MainFileIncludes[Idx]);
+  return Includes;
+}
+
 void IncludeInserter::addExisting(const Inclusion &Inc) {
   IncludedHeaders.insert(Inc.Written);
   if (!Inc.Resolved.empty())
@@ -306,7 +326,7 @@ bool IncludeInserter::shouldInsertInclude(
   return !Included(DeclaringHeader) && !Included(InsertedHeader.File);
 }
 
-llvm::Optional<std::string>
+std::optional<std::string>
 IncludeInserter::calculateIncludePath(const HeaderFile &InsertedHeader,
                                       llvm::StringRef IncludingFile) const {
   assert(InsertedHeader.valid());
@@ -328,7 +348,7 @@ IncludeInserter::calculateIncludePath(const HeaderFile &InsertedHeader,
   }
   // FIXME: should we allow (some limited number of) "../header.h"?
   if (llvm::sys::path::is_absolute(Suggested))
-    return None;
+    return std::nullopt;
   if (IsSystem)
     Suggested = "<" + Suggested + ">";
   else
@@ -336,11 +356,13 @@ IncludeInserter::calculateIncludePath(const HeaderFile &InsertedHeader,
   return Suggested;
 }
 
-llvm::Optional<TextEdit>
-IncludeInserter::insert(llvm::StringRef VerbatimHeader) const {
-  llvm::Optional<TextEdit> Edit = None;
-  if (auto Insertion = Inserter.insert(VerbatimHeader.trim("\"<>"),
-                                       VerbatimHeader.startswith("<")))
+std::optional<TextEdit>
+IncludeInserter::insert(llvm::StringRef VerbatimHeader,
+                        tooling::IncludeDirective Directive) const {
+  std::optional<TextEdit> Edit;
+  if (auto Insertion =
+          Inserter.insert(VerbatimHeader.trim("\"<>"),
+                          VerbatimHeader.startswith("<"), Directive))
     Edit = replacementToEdit(Code, *Insertion);
   return Edit;
 }

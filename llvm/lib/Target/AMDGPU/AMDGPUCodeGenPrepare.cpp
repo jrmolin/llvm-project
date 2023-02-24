@@ -14,15 +14,16 @@
 
 #include "AMDGPU.h"
 #include "AMDGPUTargetMachine.h"
+#include "SIModeRegisterDefaults.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/LegacyDivergenceAnalysis.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstVisitor.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
-#include "llvm/IR/IRBuilder.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/KnownBits.h"
@@ -468,10 +469,12 @@ static void extractValues(IRBuilder<> &Builder,
 static Value *insertValues(IRBuilder<> &Builder,
                            Type *Ty,
                            SmallVectorImpl<Value *> &Values) {
-  if (Values.size() == 1)
+  if (!Ty->isVectorTy()) {
+    assert(Values.size() == 1);
     return Values[0];
+  }
 
-  Value *NewVal = UndefValue::get(Ty);
+  Value *NewVal = PoisonValue::get(Ty);
   for (int I = 0, E = Values.size(); I != E; ++I)
     NewVal = Builder.CreateInsertElement(NewVal, Values[I], I);
 
@@ -626,13 +629,13 @@ bool AMDGPUCodeGenPrepare::foldBinOpIntoSelect(BinaryOperator &BO) const {
   Constant *FoldedT = SelOpNo ?
     ConstantFoldBinaryOpOperands(BO.getOpcode(), CBO, CT, *DL) :
     ConstantFoldBinaryOpOperands(BO.getOpcode(), CT, CBO, *DL);
-  if (isa<ConstantExpr>(FoldedT))
+  if (!FoldedT || isa<ConstantExpr>(FoldedT))
     return false;
 
   Constant *FoldedF = SelOpNo ?
     ConstantFoldBinaryOpOperands(BO.getOpcode(), CBO, CF, *DL) :
     ConstantFoldBinaryOpOperands(BO.getOpcode(), CF, CBO, *DL);
-  if (isa<ConstantExpr>(FoldedF))
+  if (!FoldedF || isa<ConstantExpr>(FoldedF))
     return false;
 
   IRBuilder<> Builder(&BO);
@@ -792,7 +795,7 @@ bool AMDGPUCodeGenPrepare::visitFDiv(BinaryOperator &FDiv) {
 
   Value *NewFDiv = nullptr;
   if (auto *VT = dyn_cast<FixedVectorType>(FDiv.getType())) {
-    NewFDiv = UndefValue::get(VT);
+    NewFDiv = PoisonValue::get(VT);
 
     // FIXME: Doesn't do the right thing for cases where the vector is partially
     // constant. This works when the scalarizer pass is run first.
@@ -870,7 +873,7 @@ static std::pair<Value*, Value*> getMul64(IRBuilder<> &Builder,
   Value *Lo = Builder.CreateTrunc(MUL64, I32Ty);
   Value *Hi = Builder.CreateLShr(MUL64, Builder.getInt64(32));
   Hi = Builder.CreateTrunc(Hi, I32Ty);
-  return std::make_pair(Lo, Hi);
+  return std::pair(Lo, Hi);
 }
 
 static Value* getMulHu(IRBuilder<> &Builder, Value *LHS, Value *RHS) {
@@ -1145,7 +1148,7 @@ Value *AMDGPUCodeGenPrepare::expandDivRem32(IRBuilder<> &Builder,
   Value *FloatY = Builder.CreateUIToFP(Y, F32Ty);
   Function *Rcp = Intrinsic::getDeclaration(Mod, Intrinsic::amdgcn_rcp, F32Ty);
   Value *RcpY = Builder.CreateCall(Rcp, {FloatY});
-  Constant *Scale = ConstantFP::get(F32Ty, BitsToFloat(0x4F7FFFFE));
+  Constant *Scale = ConstantFP::get(F32Ty, llvm::bit_cast<float>(0x4F7FFFFE));
   Value *ScaledY = Builder.CreateFMul(RcpY, Scale);
   Value *Z = Builder.CreateFPToUI(ScaledY, I32Ty);
 
@@ -1258,7 +1261,7 @@ bool AMDGPUCodeGenPrepare::visitBinaryOperator(BinaryOperator &I) {
     Builder.SetCurrentDebugLocation(I.getDebugLoc());
 
     if (auto *VT = dyn_cast<FixedVectorType>(Ty)) {
-      NewDiv = UndefValue::get(VT);
+      NewDiv = PoisonValue::get(VT);
 
       for (unsigned N = 0, E = VT->getNumElements(); N != E; ++N) {
         Value *NumEltN = Builder.CreateExtractElement(Num, N);
@@ -1423,7 +1426,7 @@ bool AMDGPUCodeGenPrepare::runOnFunction(Function &F) {
 
   HasUnsafeFPMath = hasUnsafeFPMath(F);
 
-  AMDGPU::SIModeRegisterDefaults Mode(F);
+  SIModeRegisterDefaults Mode(F);
   HasFP32Denormals = Mode.allFP32Denormals();
 
   bool MadeChange = false;

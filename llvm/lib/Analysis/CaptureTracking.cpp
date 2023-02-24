@@ -45,9 +45,9 @@ STATISTIC(NumNotCapturedBefore, "Number of pointers not captured before");
 /// use it where possible. The caching version can use much higher limit or
 /// don't have this cap at all.
 static cl::opt<unsigned>
-DefaultMaxUsesToExplore("capture-tracking-max-uses-to-explore", cl::Hidden,
-                        cl::desc("Maximal number of uses to explore."),
-                        cl::init(20));
+    DefaultMaxUsesToExplore("capture-tracking-max-uses-to-explore", cl::Hidden,
+                            cl::desc("Maximal number of uses to explore."),
+                            cl::init(100));
 
 unsigned llvm::getDefaultMaxUsesToExploreForCaptureTracking() {
   return DefaultMaxUsesToExplore;
@@ -179,25 +179,10 @@ namespace {
       if (EphValues.contains(I))
         return false;
 
-      if (!EarliestCapture) {
+      if (!EarliestCapture)
         EarliestCapture = I;
-      } else if (EarliestCapture->getParent() == I->getParent()) {
-        if (I->comesBefore(EarliestCapture))
-          EarliestCapture = I;
-      } else {
-        BasicBlock *CurrentBB = I->getParent();
-        BasicBlock *EarliestBB = EarliestCapture->getParent();
-        if (DT.dominates(EarliestBB, CurrentBB)) {
-          // EarliestCapture already comes before the current use.
-        } else if (DT.dominates(CurrentBB, EarliestBB)) {
-          EarliestCapture = I;
-        } else {
-          // Otherwise find the nearest common dominator and use its terminator.
-          auto *NearestCommonDom =
-              DT.findNearestCommonDominator(CurrentBB, EarliestBB);
-          EarliestCapture = NearestCommonDom->getTerminator();
-        }
-      }
+      else
+        EarliestCapture = DT.findNearestCommonDominator(EarliestCapture, I);
       Captured = true;
 
       // Return false to continue analysis; we need to see all potential
@@ -418,12 +403,7 @@ UseCaptureKind llvm::DetermineUseCaptureKind(
           return UseCaptureKind::NO_CAPTURE;
       }
     }
-    // Comparison against value stored in global variable. Given the pointer
-    // does not escape, its value cannot be guessed and stored separately in a
-    // global variable.
-    auto *LI = dyn_cast<LoadInst>(I->getOperand(OtherIdx));
-    if (LI && isa<GlobalVariable>(LI->getPointerOperand()))
-      return UseCaptureKind::NO_CAPTURE;
+
     // Otherwise, be conservative. There are crazy ways to capture pointers
     // using comparisons.
     return UseCaptureKind::MAY_CAPTURE;
@@ -445,11 +425,10 @@ void llvm::PointerMayBeCaptured(const Value *V, CaptureTracker *Tracker,
   SmallSet<const Use *, 20> Visited;
 
   auto AddUses = [&](const Value *V) {
-    unsigned Count = 0;
     for (const Use &U : V->uses()) {
       // If there are lots of uses, conservatively say that the value
       // is captured to avoid taking too much compile time.
-      if (Count++ >= MaxUsesToExplore) {
+      if (Visited.size()  >= MaxUsesToExplore) {
         Tracker->tooManyUses();
         return false;
       }

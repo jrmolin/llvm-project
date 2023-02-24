@@ -6,8 +6,10 @@
 //
 //===----------------------------------------------------------------------===//
 
+// This test is hitting Clang bugs with LSV in older versions of Clang.
+// UNSUPPORTED: modules-build && (clang-15 || apple-clang-14)
+
 // UNSUPPORTED: c++03, c++11, c++14, c++17
-// UNSUPPORTED: libcpp-has-no-incomplete-ranges
 
 // constexpr iterator_t<V> operator->() const
 //    requires has-arrow<iterator_t<V>> && copyable<iterator_t<V>>

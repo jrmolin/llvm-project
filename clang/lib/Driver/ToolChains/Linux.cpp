@@ -8,6 +8,7 @@
 
 #include "Linux.h"
 #include "Arch/ARM.h"
+#include "Arch/LoongArch.h"
 #include "Arch/Mips.h"
 #include "Arch/PPC.h"
 #include "Arch/RISCV.h"
@@ -97,9 +98,9 @@ std::string Linux::getMultiarchTriple(const Driver &D,
   case llvm::Triple::mips64: {
     std::string MT = std::string(IsMipsR6 ? "mipsisa64r6" : "mips64") +
                      "-linux-" + (IsMipsN32Abi ? "gnuabin32" : "gnuabi64");
-    if (D.getVFS().exists(SysRoot + "/lib/" + MT))
+    if (D.getVFS().exists(concat(SysRoot, "/lib", MT)))
       return MT;
-    if (D.getVFS().exists(SysRoot + "/lib/mips64-linux-gnu"))
+    if (D.getVFS().exists(concat(SysRoot, "/lib/mips64-linux-gnu")))
       return "mips64-linux-gnu";
     break;
   }
@@ -108,14 +109,14 @@ std::string Linux::getMultiarchTriple(const Driver &D,
       return "mips64el-linux-android";
     std::string MT = std::string(IsMipsR6 ? "mipsisa64r6el" : "mips64el") +
                      "-linux-" + (IsMipsN32Abi ? "gnuabin32" : "gnuabi64");
-    if (D.getVFS().exists(SysRoot + "/lib/" + MT))
+    if (D.getVFS().exists(concat(SysRoot, "/lib", MT)))
       return MT;
-    if (D.getVFS().exists(SysRoot + "/lib/mips64el-linux-gnu"))
+    if (D.getVFS().exists(concat(SysRoot, "/lib/mips64el-linux-gnu")))
       return "mips64el-linux-gnu";
     break;
   }
   case llvm::Triple::ppc:
-    if (D.getVFS().exists(SysRoot + "/lib/powerpc-linux-gnuspe"))
+    if (D.getVFS().exists(concat(SysRoot, "/lib/powerpc-linux-gnuspe")))
       return "powerpc-linux-gnuspe";
     return "powerpc-linux-gnu";
   case llvm::Triple::ppcle:
@@ -124,6 +125,8 @@ std::string Linux::getMultiarchTriple(const Driver &D,
     return "powerpc64-linux-gnu";
   case llvm::Triple::ppc64le:
     return "powerpc64le-linux-gnu";
+  case llvm::Triple::riscv64:
+    return "riscv64-linux-gnu";
   case llvm::Triple::sparc:
     return "sparc-linux-gnu";
   case llvm::Triple::sparcv9:
@@ -236,24 +239,17 @@ Linux::Linux(const Driver &D, const llvm::Triple &Triple, const ArgList &Args)
   // Android loader does not support .gnu.hash until API 23.
   // Hexagon linker/loader does not support .gnu.hash
   if (!IsMips && !IsHexagon) {
-    if (Distro.IsRedhat() || Distro.IsOpenSUSE() || Distro.IsAlpineLinux() ||
-        (Distro.IsUbuntu() && Distro >= Distro::UbuntuMaverick) ||
-        (IsAndroid && !Triple.isAndroidVersionLT(23)))
-      ExtraOpts.push_back("--hash-style=gnu");
-
-    if (Distro.IsDebian() || Distro.IsOpenSUSE() ||
-        Distro == Distro::UbuntuLucid || Distro == Distro::UbuntuJaunty ||
-        Distro == Distro::UbuntuKarmic ||
+    if (Distro.IsOpenSUSE() || Distro == Distro::UbuntuLucid ||
+        Distro == Distro::UbuntuJaunty || Distro == Distro::UbuntuKarmic ||
         (IsAndroid && Triple.isAndroidVersionLT(23)))
       ExtraOpts.push_back("--hash-style=both");
+    else
+      ExtraOpts.push_back("--hash-style=gnu");
   }
 
 #ifdef ENABLE_LINKER_BUILD_ID
   ExtraOpts.push_back("--build-id");
 #endif
-
-  if (IsAndroid || Distro.IsOpenSUSE())
-    ExtraOpts.push_back("--enable-new-dtags");
 
   // The selection of paths to try here is designed to match the patterns which
   // the GCC driver itself uses, as this is part of the GCC-compatible driver.
@@ -269,13 +265,13 @@ Linux::Linux(const Driver &D, const llvm::Triple &Triple, const ArgList &Args)
   // used. We need add both libo32 and /lib.
   if (Arch == llvm::Triple::mips || Arch == llvm::Triple::mipsel) {
     Generic_GCC::AddMultilibPaths(D, SysRoot, "libo32", MultiarchTriple, Paths);
-    addPathIfExists(D, SysRoot + "/libo32", Paths);
-    addPathIfExists(D, SysRoot + "/usr/libo32", Paths);
+    addPathIfExists(D, concat(SysRoot, "/libo32"), Paths);
+    addPathIfExists(D, concat(SysRoot, "/usr/libo32"), Paths);
   }
   Generic_GCC::AddMultilibPaths(D, SysRoot, OSLibDir, MultiarchTriple, Paths);
 
-  addPathIfExists(D, SysRoot + "/lib/" + MultiarchTriple, Paths);
-  addPathIfExists(D, SysRoot + "/lib/../" + OSLibDir, Paths);
+  addPathIfExists(D, concat(SysRoot, "/lib", MultiarchTriple), Paths);
+  addPathIfExists(D, concat(SysRoot, "/lib/..", OSLibDir), Paths);
 
   if (IsAndroid) {
     // Android sysroots contain a library directory for each supported OS
@@ -283,24 +279,24 @@ Linux::Linux(const Driver &D, const llvm::Triple &Triple, const ArgList &Args)
     // directory.
     addPathIfExists(
         D,
-        SysRoot + "/usr/lib/" + MultiarchTriple + "/" +
-            llvm::to_string(Triple.getEnvironmentVersion().getMajor()),
+        concat(SysRoot, "/usr/lib", MultiarchTriple,
+               llvm::to_string(Triple.getEnvironmentVersion().getMajor())),
         Paths);
   }
 
-  addPathIfExists(D, SysRoot + "/usr/lib/" + MultiarchTriple, Paths);
+  addPathIfExists(D, concat(SysRoot, "/usr/lib", MultiarchTriple), Paths);
   // 64-bit OpenEmbedded sysroots may not have a /usr/lib dir. So they cannot
   // find /usr/lib64 as it is referenced as /usr/lib/../lib64. So we handle
   // this here.
   if (Triple.getVendor() == llvm::Triple::OpenEmbedded &&
       Triple.isArch64Bit())
-    addPathIfExists(D, SysRoot + "/usr/" + OSLibDir, Paths);
+    addPathIfExists(D, concat(SysRoot, "/usr", OSLibDir), Paths);
   else
-    addPathIfExists(D, SysRoot + "/usr/lib/../" + OSLibDir, Paths);
+    addPathIfExists(D, concat(SysRoot, "/usr/lib/..", OSLibDir), Paths);
   if (IsRISCV) {
     StringRef ABIName = tools::riscv::getRISCVABI(Args, Triple);
-    addPathIfExists(D, SysRoot + "/" + OSLibDir + "/" + ABIName, Paths);
-    addPathIfExists(D, SysRoot + "/usr/" + OSLibDir + "/" + ABIName, Paths);
+    addPathIfExists(D, concat(SysRoot, "/", OSLibDir, ABIName), Paths);
+    addPathIfExists(D, concat(SysRoot, "/usr", OSLibDir, ABIName), Paths);
   }
 
   Generic_GCC::AddMultiarchPaths(D, SysRoot, OSLibDir, Paths);
@@ -312,8 +308,8 @@ Linux::Linux(const Driver &D, const llvm::Triple &Triple, const ArgList &Args)
       D.getVFS().exists(D.Dir + "/../lib/libc++.so"))
     addPathIfExists(D, D.Dir + "/../lib", Paths);
 
-  addPathIfExists(D, SysRoot + "/lib", Paths);
-  addPathIfExists(D, SysRoot + "/usr/lib", Paths);
+  addPathIfExists(D, concat(SysRoot, "/lib"), Paths);
+  addPathIfExists(D, concat(SysRoot, "/usr/lib"), Paths);
 }
 
 ToolChain::RuntimeLibType Linux::GetDefaultRuntimeLibType() const {
@@ -471,6 +467,22 @@ std::string Linux::getDynamicLinker(const ArgList &Args) const {
     Loader = HF ? "ld-linux-armhf.so.3" : "ld-linux.so.3";
     break;
   }
+  case llvm::Triple::loongarch32: {
+    LibDir = "lib32";
+    Loader =
+        ("ld-linux-loongarch-" +
+         tools::loongarch::getLoongArchABI(getDriver(), Args, Triple) + ".so.1")
+            .str();
+    break;
+  }
+  case llvm::Triple::loongarch64: {
+    LibDir = "lib64";
+    Loader =
+        ("ld-linux-loongarch-" +
+         tools::loongarch::getLoongArchABI(getDriver(), Args, Triple) + ".so.1")
+            .str();
+    break;
+  }
   case llvm::Triple::m68k:
     LibDir = "lib";
     Loader = "ld.so.1";
@@ -586,7 +598,7 @@ void Linux::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
     return;
 
   // LOCAL_INCLUDE_DIR
-  addSystemInclude(DriverArgs, CC1Args, SysRoot + "/usr/local/include");
+  addSystemInclude(DriverArgs, CC1Args, concat(SysRoot, "/usr/local/include"));
   // TOOL_INCLUDE_DIR
   AddMultilibIncludeArgs(DriverArgs, CC1Args);
 
@@ -607,9 +619,10 @@ void Linux::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
   // /usr/include.
   std::string MultiarchIncludeDir = getMultiarchTriple(D, getTriple(), SysRoot);
   if (!MultiarchIncludeDir.empty() &&
-      D.getVFS().exists(SysRoot + "/usr/include/" + MultiarchIncludeDir))
-    addExternCSystemInclude(DriverArgs, CC1Args,
-                            SysRoot + "/usr/include/" + MultiarchIncludeDir);
+      D.getVFS().exists(concat(SysRoot, "/usr/include", MultiarchIncludeDir)))
+    addExternCSystemInclude(
+        DriverArgs, CC1Args,
+        concat(SysRoot, "/usr/include", MultiarchIncludeDir));
 
   if (getTriple().getOS() == llvm::Triple::RTEMS)
     return;
@@ -617,9 +630,9 @@ void Linux::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
   // Add an include of '/include' directly. This isn't provided by default by
   // system GCCs, but is often used with cross-compiling GCCs, and harmless to
   // add even when Clang is acting as-if it were a system compiler.
-  addExternCSystemInclude(DriverArgs, CC1Args, SysRoot + "/include");
+  addExternCSystemInclude(DriverArgs, CC1Args, concat(SysRoot, "/include"));
 
-  addExternCSystemInclude(DriverArgs, CC1Args, SysRoot + "/usr/include");
+  addExternCSystemInclude(DriverArgs, CC1Args, concat(SysRoot, "/usr/include"));
 
   if (!DriverArgs.hasArg(options::OPT_nobuiltininc) && getTriple().isMusl())
     addSystemInclude(DriverArgs, CC1Args, ResourceDirInclude);
@@ -668,19 +681,23 @@ void Linux::addLibStdCxxIncludePaths(const llvm::opt::ArgList &DriverArgs,
 
 void Linux::AddCudaIncludeArgs(const ArgList &DriverArgs,
                                ArgStringList &CC1Args) const {
-  CudaInstallation.AddCudaIncludeArgs(DriverArgs, CC1Args);
+  CudaInstallation->AddCudaIncludeArgs(DriverArgs, CC1Args);
 }
 
 void Linux::AddHIPIncludeArgs(const ArgList &DriverArgs,
                               ArgStringList &CC1Args) const {
-  RocmInstallation.AddHIPIncludeArgs(DriverArgs, CC1Args);
+  RocmInstallation->AddHIPIncludeArgs(DriverArgs, CC1Args);
 }
 
 void Linux::AddHIPRuntimeLibArgs(const ArgList &Args,
                                  ArgStringList &CmdArgs) const {
-  CmdArgs.append(
-      {Args.MakeArgString(StringRef("-L") + RocmInstallation.getLibPath()),
-       "-rpath", Args.MakeArgString(RocmInstallation.getLibPath())});
+  CmdArgs.push_back(
+      Args.MakeArgString(StringRef("-L") + RocmInstallation->getLibPath()));
+
+  if (Args.hasFlag(options::OPT_offload_add_rpath,
+                   options::OPT_no_offload_add_rpath, false))
+    CmdArgs.append(
+        {"-rpath", Args.MakeArgString(RocmInstallation->getLibPath())});
 
   CmdArgs.push_back("-lamdhip64");
 }
@@ -732,6 +749,7 @@ SanitizerMask Linux::getSupportedSanitizers() const {
                          getTriple().getArch() == llvm::Triple::thumb ||
                          getTriple().getArch() == llvm::Triple::armeb ||
                          getTriple().getArch() == llvm::Triple::thumbeb;
+  const bool IsLoongArch64 = getTriple().getArch() == llvm::Triple::loongarch64;
   const bool IsRISCV64 = getTriple().getArch() == llvm::Triple::riscv64;
   const bool IsSystemZ = getTriple().getArch() == llvm::Triple::systemz;
   const bool IsHexagon = getTriple().getArch() == llvm::Triple::hexagon;
@@ -748,19 +766,22 @@ SanitizerMask Linux::getSupportedSanitizers() const {
   if (IsX86_64 || IsMIPS64 || IsAArch64)
     Res |= SanitizerKind::DataFlow;
   if (IsX86_64 || IsMIPS64 || IsAArch64 || IsX86 || IsArmArch || IsPowerPC64 ||
-      IsRISCV64 || IsSystemZ || IsHexagon)
+      IsRISCV64 || IsSystemZ || IsHexagon || IsLoongArch64)
     Res |= SanitizerKind::Leak;
-  if (IsX86_64 || IsMIPS64 || IsAArch64 || IsPowerPC64 || IsSystemZ)
+  if (IsX86_64 || IsMIPS64 || IsAArch64 || IsPowerPC64 || IsSystemZ ||
+      IsLoongArch64)
     Res |= SanitizerKind::Thread;
   if (IsX86_64)
     Res |= SanitizerKind::KernelMemory;
   if (IsX86 || IsX86_64)
     Res |= SanitizerKind::Function;
   if (IsX86_64 || IsMIPS64 || IsAArch64 || IsX86 || IsMIPS || IsArmArch ||
-      IsPowerPC64 || IsHexagon)
+      IsPowerPC64 || IsHexagon || IsLoongArch64)
     Res |= SanitizerKind::Scudo;
-  if (IsX86_64 || IsAArch64) {
+  if (IsX86_64 || IsAArch64 || IsRISCV64) {
     Res |= SanitizerKind::HWAddress;
+  }
+  if (IsX86_64 || IsAArch64) {
     Res |= SanitizerKind::KernelHWAddress;
   }
   return Res;
@@ -798,4 +819,10 @@ Linux::getDefaultDenormalModeForType(const llvm::opt::ArgList &DriverArgs,
 void Linux::addExtraOpts(llvm::opt::ArgStringList &CmdArgs) const {
   for (const auto &Opt : ExtraOpts)
     CmdArgs.push_back(Opt.c_str());
+}
+
+const char *Linux::getDefaultLinker() const {
+  if (getTriple().isAndroid())
+    return "ld.lld";
+  return Generic_ELF::getDefaultLinker();
 }

@@ -68,6 +68,7 @@
 #include "llvm/Transforms/Utils/Local.h"
 #include <cassert>
 #include <cstdint>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -99,7 +100,7 @@ static cl::opt<bool>
                            cl::init(false), cl::Hidden);
 
 static cl::opt<int> ColdCCRelFreq(
-    "coldcc-rel-freq", cl::Hidden, cl::init(2), cl::ZeroOrMore,
+    "coldcc-rel-freq", cl::Hidden, cl::init(2),
     cl::desc(
         "Maximum block frequency, expressed as a percentage of caller's "
         "entry frequency, for a call site to be considered cold for enabling"
@@ -140,9 +141,7 @@ static bool isLeakCheckerRoot(GlobalVariable *GV) {
       case Type::StructTyID: {
         StructType *STy = cast<StructType>(Ty);
         if (STy->isOpaque()) return true;
-        for (StructType::element_iterator I = STy->element_begin(),
-                 E = STy->element_end(); I != E; ++I) {
-          Type *InnerTy = *I;
+        for (Type *InnerTy : STy->elements()) {
           if (isa<PointerType>(InnerTy)) return true;
           if (isa<StructType>(InnerTy) || isa<ArrayType>(InnerTy) ||
               isa<VectorType>(InnerTy))
@@ -336,10 +335,14 @@ static bool CleanupConstantGlobalUsers(GlobalVariable *GV,
   return Changed;
 }
 
+struct GlobalPart {
+  Type *Ty;
+};
+
 /// Look at all uses of the global and determine which (offset, type) pairs it
 /// can be split into.
-static bool collectSRATypes(DenseMap<uint64_t, Type *> &Types, GlobalValue *GV,
-                            const DataLayout &DL) {
+static bool collectSRATypes(DenseMap<uint64_t, GlobalPart> &Parts,
+                            GlobalValue *GV, const DataLayout &DL) {
   SmallVector<Use *, 16> Worklist;
   SmallPtrSet<Use *, 16> Visited;
   auto AppendUses = [&](Value *V) {
@@ -374,9 +377,14 @@ static bool collectSRATypes(DenseMap<uint64_t, Type *> &Types, GlobalValue *GV,
       // TODO: We currently require that all accesses at a given offset must
       // use the same type. This could be relaxed.
       Type *Ty = getLoadStoreType(V);
-      auto It = Types.try_emplace(Offset.getZExtValue(), Ty).first;
-      if (Ty != It->second)
+      auto It = Parts.try_emplace(Offset.getZExtValue(), GlobalPart{Ty}).first;
+      if (Ty != It->second.Ty)
         return false;
+
+      // Scalable types not currently supported.
+      if (isa<ScalableVectorType>(Ty))
+        return false;
+
       continue;
     }
 
@@ -455,23 +463,23 @@ static GlobalVariable *SRAGlobal(GlobalVariable *GV, const DataLayout &DL) {
   assert(GV->hasLocalLinkage());
 
   // Collect types to split into.
-  DenseMap<uint64_t, Type *> Types;
-  if (!collectSRATypes(Types, GV, DL) || Types.empty())
+  DenseMap<uint64_t, GlobalPart> Parts;
+  if (!collectSRATypes(Parts, GV, DL) || Parts.empty())
     return nullptr;
 
   // Make sure we don't SRA back to the same type.
-  if (Types.size() == 1 && Types.begin()->second == GV->getValueType())
+  if (Parts.size() == 1 && Parts.begin()->second.Ty == GV->getValueType())
     return nullptr;
 
   // Don't perform SRA if we would have to split into many globals.
-  if (Types.size() > 16)
+  if (Parts.size() > 16)
     return nullptr;
 
   // Sort by offset.
   SmallVector<std::pair<uint64_t, Type *>, 16> TypesVector;
-  append_range(TypesVector, Types);
-  sort(TypesVector,
-       [](const auto &A, const auto &B) { return A.first < B.first; });
+  for (const auto &Pair : Parts)
+    TypesVector.push_back({Pair.first, Pair.second.Ty});
+  sort(TypesVector, llvm::less_first());
 
   // Check that the types are non-overlapping.
   uint64_t Offset = 0;
@@ -490,7 +498,7 @@ static GlobalVariable *SRAGlobal(GlobalVariable *GV, const DataLayout &DL) {
   // Collect initializers for new globals.
   Constant *OrigInit = GV->getInitializer();
   DenseMap<uint64_t, Constant *> Initializers;
-  for (const auto &Pair : Types) {
+  for (const auto &Pair : TypesVector) {
     Constant *NewInit = ConstantFoldLoadFromConst(OrigInit, Pair.second,
                                                   APInt(64, Pair.first), DL);
     if (!NewInit) {
@@ -608,17 +616,14 @@ static bool AllUsesOfValueWillTrapIfNull(const Value *V,
       // Will trap.
     } else if (const StoreInst *SI = dyn_cast<StoreInst>(U)) {
       if (SI->getOperand(0) == V) {
-        //cerr << "NONTRAPPING USE: " << *U;
         return false;  // Storing the value.
       }
     } else if (const CallInst *CI = dyn_cast<CallInst>(U)) {
       if (CI->getCalledOperand() != V) {
-        //cerr << "NONTRAPPING USE: " << *U;
         return false;  // Not calling the ptr
       }
     } else if (const InvokeInst *II = dyn_cast<InvokeInst>(U)) {
       if (II->getCalledOperand() != V) {
-        //cerr << "NONTRAPPING USE: " << *U;
         return false;  // Not calling the ptr
       }
     } else if (const BitCastInst *CI = dyn_cast<BitCastInst>(U)) {
@@ -642,7 +647,6 @@ static bool AllUsesOfValueWillTrapIfNull(const Value *V,
       // the comparing of the value of the created global init bool later in
       // optimizeGlobalAddressOfAllocation for the global variable.
     } else {
-      //cerr << "NONTRAPPING USE: " << *U;
       return false;
     }
   }
@@ -657,7 +661,7 @@ static bool allUsesOfLoadedValueWillTrapIfNull(const GlobalVariable *GV) {
   Worklist.push_back(GV);
   while (!Worklist.empty()) {
     const Value *P = Worklist.pop_back_val();
-    for (auto *U : P->users()) {
+    for (const auto *U : P->users()) {
       if (auto *LI = dyn_cast<LoadInst>(U)) {
         SmallPtrSet<const PHINode *, 8> PHIs;
         if (!AllUsesOfValueWillTrapIfNull(LI, PHIs))
@@ -884,7 +888,7 @@ OptimizeGlobalAddressOfAllocation(GlobalVariable *GV, CallInst *CI,
   if (!isa<UndefValue>(InitVal)) {
     IRBuilder<> Builder(CI->getNextNode());
     // TODO: Use alignment above if align!=1
-    Builder.CreateMemSet(NewGV, InitVal, AllocSize, None);
+    Builder.CreateMemSet(NewGV, InitVal, AllocSize, std::nullopt);
   }
 
   // Update users of the allocation to use the new global instead.
@@ -977,7 +981,7 @@ OptimizeGlobalAddressOfAllocation(GlobalVariable *GV, CallInst *CI,
       cast<StoreInst>(InitBool->user_back())->eraseFromParent();
     delete InitBool;
   } else
-    GV->getParent()->getGlobalList().insert(GV->getIterator(), InitBool);
+    GV->getParent()->insertGlobalVariable(GV->getIterator(), InitBool);
 
   // Now the GV is dead, nuke it and the allocation..
   GV->eraseFromParent();
@@ -1042,10 +1046,9 @@ valueIsOnlyUsedLocallyOrStoredToOneGlobal(const CallInst *CI,
 /// accessing the data, and exposes the resultant global to further GlobalOpt.
 static bool tryToOptimizeStoreOfAllocationToGlobal(GlobalVariable *GV,
                                                    CallInst *CI,
-                                                   AtomicOrdering Ordering,
                                                    const DataLayout &DL,
                                                    TargetLibraryInfo *TLI) {
-  if (!isAllocRemovable(CI, TLI))
+  if (!isRemovableAlloc(CI, TLI))
     // Must be able to remove the call when we get done..
     return false;
 
@@ -1089,7 +1092,7 @@ static bool tryToOptimizeStoreOfAllocationToGlobal(GlobalVariable *GV,
 // its initializer) is ever stored to the global.
 static bool
 optimizeOnceStoredGlobal(GlobalVariable *GV, Value *StoredOnceVal,
-                         AtomicOrdering Ordering, const DataLayout &DL,
+                         const DataLayout &DL,
                          function_ref<TargetLibraryInfo &(Function &)> GetTLI) {
   // Ignore no-op GEPs and bitcasts.
   StoredOnceVal = StoredOnceVal->stripPointerCasts();
@@ -1114,7 +1117,7 @@ optimizeOnceStoredGlobal(GlobalVariable *GV, Value *StoredOnceVal,
     } else if (isAllocationFn(StoredOnceVal, GetTLI)) {
       if (auto *CI = dyn_cast<CallInst>(StoredOnceVal)) {
         auto *TLI = &GetTLI(*CI->getFunction());
-        if (tryToOptimizeStoreOfAllocationToGlobal(GV, CI, Ordering, DL, TLI))
+        if (tryToOptimizeStoreOfAllocationToGlobal(GV, CI, DL, TLI))
           return true;
       }
     }
@@ -1160,7 +1163,7 @@ static bool TryToShrinkGlobalToBoolean(GlobalVariable *GV, Constant *OtherVal) {
                                              GV->getThreadLocalMode(),
                                              GV->getType()->getAddressSpace());
   NewGV->copyAttributesFrom(GV);
-  GV->getParent()->getGlobalList().insert(GV->getIterator(), NewGV);
+  GV->getParent()->insertGlobalVariable(GV->getIterator(), NewGV);
 
   Constant *InitVal = GV->getInitializer();
   assert(InitVal->getType() != Type::getInt1Ty(GV->getContext()) &&
@@ -1284,8 +1287,10 @@ static bool TryToShrinkGlobalToBoolean(GlobalVariable *GV, Constant *OtherVal) {
   return true;
 }
 
-static bool deleteIfDead(
-    GlobalValue &GV, SmallPtrSetImpl<const Comdat *> &NotDiscardableComdats) {
+static bool
+deleteIfDead(GlobalValue &GV,
+             SmallPtrSetImpl<const Comdat *> &NotDiscardableComdats,
+             function_ref<void(Function &)> DeleteFnCallback = nullptr) {
   GV.removeDeadConstantUsers();
 
   if (!GV.isDiscardableIfUnused() && !GV.isDeclaration())
@@ -1304,6 +1309,10 @@ static bool deleteIfDead(
     return false;
 
   LLVM_DEBUG(dbgs() << "GLOBAL DEAD: " << GV << "\n");
+  if (auto *F = dyn_cast<Function>(&GV)) {
+    if (DeleteFnCallback)
+      DeleteFnCallback(*F);
+  }
   GV.eraseFromParent();
   ++NumDeleted;
   return true;
@@ -1378,8 +1387,8 @@ static bool isPointerValueDeadOnEntryToFunction(
           // and the number of bits loaded in L is less than or equal to
           // the number of bits stored in S.
           return DT.dominates(S, L) &&
-                 DL.getTypeStoreSize(LTy).getFixedSize() <=
-                     DL.getTypeStoreSize(STy).getFixedSize();
+                 DL.getTypeStoreSize(LTy).getFixedValue() <=
+                     DL.getTypeStoreSize(STy).getFixedValue();
         }))
       return false;
   }
@@ -1441,6 +1450,42 @@ static void makeAllConstantUsesInstructions(Constant *C) {
     // will update value handles and metadata.)
     U->destroyConstant();
   }
+}
+
+// For a global variable with one store, if the store dominates any loads,
+// those loads will always load the stored value (as opposed to the
+// initializer), even in the presence of recursion.
+static bool forwardStoredOnceStore(
+    GlobalVariable *GV, const StoreInst *StoredOnceStore,
+    function_ref<DominatorTree &(Function &)> LookupDomTree) {
+  const Value *StoredOnceValue = StoredOnceStore->getValueOperand();
+  // We can do this optimization for non-constants in nosync + norecurse
+  // functions, but globals used in exactly one norecurse functions are already
+  // promoted to an alloca.
+  if (!isa<Constant>(StoredOnceValue))
+    return false;
+  const Function *F = StoredOnceStore->getFunction();
+  SmallVector<LoadInst *> Loads;
+  for (User *U : GV->users()) {
+    if (auto *LI = dyn_cast<LoadInst>(U)) {
+      if (LI->getFunction() == F &&
+          LI->getType() == StoredOnceValue->getType() && LI->isSimple())
+        Loads.push_back(LI);
+    }
+  }
+  // Only compute DT if we have any loads to examine.
+  bool MadeChange = false;
+  if (!Loads.empty()) {
+    auto &DT = LookupDomTree(*const_cast<Function *>(F));
+    for (auto *LI : Loads) {
+      if (DT.dominates(StoredOnceStore, LI)) {
+        LI->replaceAllUsesWith(const_cast<Value *>(StoredOnceValue));
+        LI->eraseFromParent();
+        MadeChange = true;
+      }
+    }
+  }
+  return MadeChange;
 }
 
 /// Analyze the specified global variable and optimize
@@ -1547,11 +1592,6 @@ processInternalGlobal(GlobalVariable *GV, const GlobalStatus &GS,
   }
   Value *StoredOnceValue = GS.getStoredOnceValue();
   if (GS.StoredType == GlobalStatus::StoredOnce && StoredOnceValue) {
-    // Avoid speculating constant expressions that might trap (div/rem).
-    auto *SOVConstant = dyn_cast<Constant>(StoredOnceValue);
-    if (SOVConstant && SOVConstant->canTrap())
-      return Changed;
-
     Function &StoreFn =
         const_cast<Function &>(*GS.StoredOnceStore->getFunction());
     bool CanHaveNonUndefGlobalInitializer =
@@ -1564,6 +1604,7 @@ processInternalGlobal(GlobalVariable *GV, const GlobalStatus &GS,
     // This is restricted to address spaces that allow globals to have
     // initializers. NVPTX, for example, does not support initializers for
     // shared memory (AS 3).
+    auto *SOVConstant = dyn_cast<Constant>(StoredOnceValue);
     if (SOVConstant && isa<UndefValue>(GV->getInitializer()) &&
         DL.getTypeAllocSize(SOVConstant->getType()) ==
             DL.getTypeAllocSize(GV->getValueType()) &&
@@ -1599,8 +1640,14 @@ processInternalGlobal(GlobalVariable *GV, const GlobalStatus &GS,
 
     // Try to optimize globals based on the knowledge that only one value
     // (besides its initializer) is ever stored to the global.
-    if (optimizeOnceStoredGlobal(GV, StoredOnceValue, GS.Ordering, DL, GetTLI))
+    if (optimizeOnceStoredGlobal(GV, StoredOnceValue, DL, GetTLI))
       return true;
+
+    // Try to forward the store to any loads. If we have more than one store, we
+    // may have a store of the initializer between StoredOnceStore and a load.
+    if (GS.NumStores == 1)
+      if (forwardStoredOnceStore(GV, GS.StoredOnceStore, LookupDomTree))
+        return true;
 
     // Otherwise, if the global was not a boolean, we can shrink it to be a
     // boolean. Skip this optimization for AS that doesn't allow an initializer.
@@ -1780,11 +1827,14 @@ hasOnlyColdCalls(Function &F,
         Function *CalledFn = CI->getCalledFunction();
         if (!CalledFn)
           return false;
-        if (!CalledFn->hasLocalLinkage())
-          return false;
         // Skip over intrinsics since they won't remain as function calls.
+        // Important to do this check before the linkage check below so we
+        // won't bail out on debug intrinsics, possibly making the generated
+        // code dependent on the presence of debug info.
         if (CalledFn->getIntrinsicID() != Intrinsic::not_intrinsic)
           continue;
+        if (!CalledFn->hasLocalLinkage())
+          return false;
         // Check if it's valid to use coldcc calling convention.
         if (!hasChangeableCC(CalledFn) || CalledFn->isVarArg() ||
             CalledFn->hasAddressTaken())
@@ -1911,7 +1961,9 @@ OptimizeFunctions(Module &M,
                   function_ref<TargetTransformInfo &(Function &)> GetTTI,
                   function_ref<BlockFrequencyInfo &(Function &)> GetBFI,
                   function_ref<DominatorTree &(Function &)> LookupDomTree,
-                  SmallPtrSetImpl<const Comdat *> &NotDiscardableComdats) {
+                  SmallPtrSetImpl<const Comdat *> &NotDiscardableComdats,
+                  function_ref<void(Function &F)> ChangedCFGCallback,
+                  function_ref<void(Function &F)> DeleteFnCallback) {
 
   bool Changed = false;
 
@@ -1931,7 +1983,7 @@ OptimizeFunctions(Module &M,
     if (!F.hasName() && !F.isDeclaration() && !F.hasLocalLinkage())
       F.setLinkage(GlobalValue::InternalLinkage);
 
-    if (deleteIfDead(F, NotDiscardableComdats)) {
+    if (deleteIfDead(F, NotDiscardableComdats, DeleteFnCallback)) {
       Changed = true;
       continue;
     }
@@ -1944,13 +1996,11 @@ OptimizeFunctions(Module &M,
     // So, remove unreachable blocks from the function, because a) there's
     // no point in analyzing them and b) GlobalOpt should otherwise grow
     // some more complicated logic to break these cycles.
-    // Removing unreachable blocks might invalidate the dominator so we
-    // recalculate it.
+    // Notify the analysis manager that we've modified the function's CFG.
     if (!F.isDeclaration()) {
       if (removeUnreachableBlocks(F)) {
-        auto &DT = LookupDomTree(F);
-        DT.recalculate(F);
         Changed = true;
+        ChangedCFGCallback(F);
       }
     }
 
@@ -1965,7 +2015,7 @@ OptimizeFunctions(Module &M,
     // FIXME: We should also hoist alloca affected by this to the entry
     // block if possible.
     if (F.getAttributes().hasAttrSomewhere(Attribute::InAlloca) &&
-        !F.hasAddressTaken() && !hasMustTailCallers(&F)) {
+        !F.hasAddressTaken() && !hasMustTailCallers(&F) && !F.isVarArg()) {
       RemoveAttribute(&F, Attribute::InAlloca);
       Changed = true;
     }
@@ -2058,6 +2108,9 @@ OptimizeGlobalVars(Module &M,
 /// can, false otherwise.
 static bool EvaluateStaticConstructor(Function *F, const DataLayout &DL,
                                       TargetLibraryInfo *TLI) {
+  // Skip external functions.
+  if (F->isDeclaration())
+    return false;
   // Call the function.
   Evaluator Eval(DL, TLI);
   Constant *RetValDummy;
@@ -2312,7 +2365,7 @@ OptimizeGlobalAliases(Module &M,
       continue;
 
     // Delete the alias.
-    M.getAliasList().erase(&J);
+    M.eraseAlias(&J);
     ++NumAliasesRemoved;
     Changed = true;
   }
@@ -2358,7 +2411,7 @@ static bool cxxDtorIsEmpty(const Function &Fn) {
   if (Fn.isDeclaration())
     return false;
 
-  for (auto &I : Fn.getEntryBlock()) {
+  for (const auto &I : Fn.getEntryBlock()) {
     if (I.isDebugOrPseudoInst())
       continue;
     if (isa<ReturnInst>(I))
@@ -2410,15 +2463,19 @@ static bool OptimizeEmptyGlobalCXXDtors(Function *CXAAtExitFn) {
   return Changed;
 }
 
-static bool optimizeGlobalsInModule(
-    Module &M, const DataLayout &DL,
-    function_ref<TargetLibraryInfo &(Function &)> GetTLI,
-    function_ref<TargetTransformInfo &(Function &)> GetTTI,
-    function_ref<BlockFrequencyInfo &(Function &)> GetBFI,
-    function_ref<DominatorTree &(Function &)> LookupDomTree) {
+static bool
+optimizeGlobalsInModule(Module &M, const DataLayout &DL,
+                        function_ref<TargetLibraryInfo &(Function &)> GetTLI,
+                        function_ref<TargetTransformInfo &(Function &)> GetTTI,
+                        function_ref<BlockFrequencyInfo &(Function &)> GetBFI,
+                        function_ref<DominatorTree &(Function &)> LookupDomTree,
+                        function_ref<void(Function &F)> ChangedCFGCallback,
+                        function_ref<void(Function &F)> DeleteFnCallback) {
   SmallPtrSet<const Comdat *, 8> NotDiscardableComdats;
   bool Changed = false;
   bool LocalChange = true;
+  std::optional<uint32_t> FirstNotFullyEvaluatedPriority;
+
   while (LocalChange) {
     LocalChange = false;
 
@@ -2438,12 +2495,20 @@ static bool optimizeGlobalsInModule(
 
     // Delete functions that are trivially dead, ccc -> fastcc
     LocalChange |= OptimizeFunctions(M, GetTLI, GetTTI, GetBFI, LookupDomTree,
-                                     NotDiscardableComdats);
+                                     NotDiscardableComdats, ChangedCFGCallback,
+                                     DeleteFnCallback);
 
     // Optimize global_ctors list.
-    LocalChange |= optimizeGlobalCtorsList(M, [&](Function *F) {
-      return EvaluateStaticConstructor(F, DL, &GetTLI(*F));
-    });
+    LocalChange |=
+        optimizeGlobalCtorsList(M, [&](uint32_t Priority, Function *F) {
+          if (FirstNotFullyEvaluatedPriority &&
+              *FirstNotFullyEvaluatedPriority != Priority)
+            return false;
+          bool Evaluated = EvaluateStaticConstructor(F, DL, &GetTLI(*F));
+          if (!Evaluated)
+            FirstNotFullyEvaluatedPriority = Priority;
+          return Evaluated;
+        });
 
     // Optimize non-address-taken globals.
     LocalChange |= OptimizeGlobalVars(M, GetTTI, GetTLI, LookupDomTree,
@@ -2484,65 +2549,21 @@ PreservedAnalyses GlobalOptPass::run(Module &M, ModuleAnalysisManager &AM) {
     auto GetBFI = [&FAM](Function &F) -> BlockFrequencyInfo & {
       return FAM.getResult<BlockFrequencyAnalysis>(F);
     };
+    auto ChangedCFGCallback = [&FAM](Function &F) {
+      FAM.invalidate(F, PreservedAnalyses::none());
+    };
+    auto DeleteFnCallback = [&FAM](Function &F) { FAM.clear(F, F.getName()); };
 
-    if (!optimizeGlobalsInModule(M, DL, GetTLI, GetTTI, GetBFI, LookupDomTree))
+    if (!optimizeGlobalsInModule(M, DL, GetTLI, GetTTI, GetBFI, LookupDomTree,
+                                 ChangedCFGCallback, DeleteFnCallback))
       return PreservedAnalyses::all();
-    return PreservedAnalyses::none();
-}
 
-namespace {
-
-struct GlobalOptLegacyPass : public ModulePass {
-  static char ID; // Pass identification, replacement for typeid
-
-  GlobalOptLegacyPass() : ModulePass(ID) {
-    initializeGlobalOptLegacyPassPass(*PassRegistry::getPassRegistry());
-  }
-
-  bool runOnModule(Module &M) override {
-    if (skipModule(M))
-      return false;
-
-    auto &DL = M.getDataLayout();
-    auto LookupDomTree = [this](Function &F) -> DominatorTree & {
-      return this->getAnalysis<DominatorTreeWrapperPass>(F).getDomTree();
-    };
-    auto GetTLI = [this](Function &F) -> TargetLibraryInfo & {
-      return this->getAnalysis<TargetLibraryInfoWrapperPass>().getTLI(F);
-    };
-    auto GetTTI = [this](Function &F) -> TargetTransformInfo & {
-      return this->getAnalysis<TargetTransformInfoWrapperPass>().getTTI(F);
-    };
-
-    auto GetBFI = [this](Function &F) -> BlockFrequencyInfo & {
-      return this->getAnalysis<BlockFrequencyInfoWrapperPass>(F).getBFI();
-    };
-
-    return optimizeGlobalsInModule(M, DL, GetTLI, GetTTI, GetBFI,
-                                   LookupDomTree);
-  }
-
-  void getAnalysisUsage(AnalysisUsage &AU) const override {
-    AU.addRequired<TargetLibraryInfoWrapperPass>();
-    AU.addRequired<TargetTransformInfoWrapperPass>();
-    AU.addRequired<DominatorTreeWrapperPass>();
-    AU.addRequired<BlockFrequencyInfoWrapperPass>();
-  }
-};
-
-} // end anonymous namespace
-
-char GlobalOptLegacyPass::ID = 0;
-
-INITIALIZE_PASS_BEGIN(GlobalOptLegacyPass, "globalopt",
-                      "Global Variable Optimizer", false, false)
-INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(TargetTransformInfoWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(BlockFrequencyInfoWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
-INITIALIZE_PASS_END(GlobalOptLegacyPass, "globalopt",
-                    "Global Variable Optimizer", false, false)
-
-ModulePass *llvm::createGlobalOptimizerPass() {
-  return new GlobalOptLegacyPass();
+    PreservedAnalyses PA = PreservedAnalyses::none();
+    // We made sure to clear analyses for deleted functions.
+    PA.preserve<FunctionAnalysisManagerModuleProxy>();
+    // The only place we modify the CFG is when calling
+    // removeUnreachableBlocks(), but there we make sure to invalidate analyses
+    // for modified functions.
+    PA.preserveSet<CFGAnalyses>();
+    return PA;
 }

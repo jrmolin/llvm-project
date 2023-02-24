@@ -14,8 +14,8 @@
 #include "MCTargetDesc/LoongArchMCTargetDesc.h"
 #include "TargetInfo/LoongArchTargetInfo.h"
 #include "llvm/MC/MCContext.h"
+#include "llvm/MC/MCDecoderOps.h"
 #include "llvm/MC/MCDisassembler/MCDisassembler.h"
-#include "llvm/MC/MCFixedLenDisassembler.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
@@ -39,7 +39,7 @@ public:
                               ArrayRef<uint8_t> Bytes, uint64_t Address,
                               raw_ostream &CStream) const override;
 };
-} // end anonymous namespace
+} // end namespace
 
 static MCDisassembler *createLoongArchDisassembler(const Target &T,
                                                    const MCSubtargetInfo &STI,
@@ -114,9 +114,9 @@ static DecodeStatus decodeSImmOperand(MCInst &Inst, uint64_t Imm,
                                       int64_t Address,
                                       const MCDisassembler *Decoder) {
   assert(isUInt<N>(Imm) && "Invalid immediate");
-  // Sign-extend the number in the bottom <N> bits of Imm, then shift left <S>
+  // Shift left Imm <S> bits, then sign-extend the number in the bottom <N+S>
   // bits.
-  Inst.addOperand(MCOperand::createImm(SignExtend64<N>(Imm) << S));
+  Inst.addOperand(MCOperand::createImm(SignExtend64<N + S>(Imm << S)));
   return MCDisassembler::Success;
 }
 

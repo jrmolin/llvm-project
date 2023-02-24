@@ -1,7 +1,4 @@
-// RUN: mlir-opt %s -pass-pipeline='func.func(canonicalize)' -split-input-file | FileCheck %s
-
-
-// -----
+// RUN: mlir-opt %s -pass-pipeline='builtin.module(func.func(canonicalize{test-convergence}))' -split-input-file | FileCheck %s
 
 func.func @single_iteration_some(%A: memref<?x?x?xi32>) {
   %c0 = arith.constant 0 : index
@@ -137,7 +134,7 @@ func.func @nested_parallel(%0: memref<?x?x?xf64>) -> memref<?x?x?xf64> {
 func.func private @side_effect()
 func.func @one_unused(%cond: i1) -> (index) {
   %0, %1 = scf.if %cond -> (index, index) {
-    call @side_effect() : () -> ()
+    func.call @side_effect() : () -> ()
     %c0 = "test.value0"() : () -> (index)
     %c1 = "test.value1"() : () -> (index)
     scf.yield %c0, %c1 : index, index
@@ -166,7 +163,7 @@ func.func private @side_effect()
 func.func @nested_unused(%cond1: i1, %cond2: i1) -> (index) {
   %0, %1 = scf.if %cond1 -> (index, index) {
     %2, %3 = scf.if %cond2 -> (index, index) {
-      call @side_effect() : () -> ()
+      func.call @side_effect() : () -> ()
       %c0 = "test.value0"() : () -> (index)
       %c1 = "test.value1"() : () -> (index)
       scf.yield %c0, %c1 : index, index
@@ -208,10 +205,10 @@ func.func @all_unused(%cond: i1) {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
   %0, %1 = scf.if %cond -> (index, index) {
-    call @side_effect() : () -> ()
+    func.call @side_effect() : () -> ()
     scf.yield %c0, %c1 : index, index
   } else {
-    call @side_effect() : () -> ()
+    func.call @side_effect() : () -> ()
     scf.yield %c0, %c1 : index, index
   }
   return
@@ -324,7 +321,7 @@ func.func @to_select_with_body(%cond: i1) -> index {
 // CHECK:           [[V0:%.*]] = arith.select {{.*}}, [[C0]], [[C1]]
 // CHECK:           scf.if {{.*}} {
 // CHECK:             "test.op"() : () -> ()
-// CHECK:           } 
+// CHECK:           }
 // CHECK:           return [[V0]] : index
 // -----
 
@@ -370,9 +367,9 @@ func.func @for_yields_3(%lb : index, %ub : index, %step : index) -> (i32, i32, i
   %a = call @make_i32() : () -> (i32)
   %b = call @make_i32() : () -> (i32)
   %r:3 = scf.for %i = %lb to %ub step %step iter_args(%0 = %a, %1 = %a, %2 = %b) -> (i32, i32, i32) {
-    %c = call @make_i32() : () -> (i32)
+    %c = func.call @make_i32() : () -> (i32)
     scf.yield %0, %c, %2 : i32, i32, i32
-  }
+  } {some_attr}
   return %r#0, %r#1, %r#2 : i32, i32, i32
 }
 
@@ -380,9 +377,9 @@ func.func @for_yields_3(%lb : index, %ub : index, %step : index) -> (i32, i32, i
 //  CHECK-NEXT:     %[[a:.*]] = call @make_i32() : () -> i32
 //  CHECK-NEXT:     %[[b:.*]] = call @make_i32() : () -> i32
 //  CHECK-NEXT:     %[[r1:.*]] = scf.for {{.*}} iter_args(%arg4 = %[[a]]) -> (i32) {
-//  CHECK-NEXT:       %[[c:.*]] = call @make_i32() : () -> i32
+//  CHECK-NEXT:       %[[c:.*]] = func.call @make_i32() : () -> i32
 //  CHECK-NEXT:       scf.yield %[[c]] : i32
-//  CHECK-NEXT:     }
+//  CHECK-NEXT:     } {some_attr}
 //  CHECK-NEXT:     return %[[a]], %[[r1]], %[[b]] : i32, i32, i32
 
 // -----
@@ -547,7 +544,7 @@ func.func @merge_yielding_nested_if_nv1(%arg0: i1, %arg1: i1) {
       scf.yield %0, %1 : i32, f32
     }
   }
-  return 
+  return
 }
 
 // CHECK-LABEL: @merge_yielding_nested_if_nv2
@@ -557,7 +554,7 @@ func.func @merge_yielding_nested_if_nv2(%arg0: i1, %arg1: i1) -> i32 {
 // CHECK: %[[PRE1:.*]] = "test.op1"() : () -> i32
 // CHECK: %[[COND:.*]] = arith.andi %[[ARG0]], %[[ARG1]]
 // CHECK: %[[RES:.*]] = arith.select %[[ARG0]], %[[PRE0]], %[[PRE1]]
-// CHECK: scf.if %[[COND]] 
+// CHECK: scf.if %[[COND]]
 // CHECK:   "test.run"() : () -> ()
 // CHECK: }
 // CHECK: return %[[RES]]
@@ -719,6 +716,26 @@ func.func @replace_single_iteration_loop_non_unit_step() {
   return
 }
 
+
+// -----
+
+// CHECK-LABEL: func @replace_single_iteration_const_diff(
+//  CHECK-SAME: %[[A0:.*]]: index)
+func.func @replace_single_iteration_const_diff(%arg0 : index) {
+  // CHECK-NEXT: %[[CST:.*]] = arith.constant 2
+  %c1 = arith.constant 1 : index
+  %c2 = arith.constant 2 : index
+  %5 = arith.addi %arg0, %c1 : index
+  // CHECK-NOT: scf.for
+  scf.for %arg2 = %arg0 to %5 step %c1 {
+    // CHECK-NEXT: %[[MUL:.*]] = arith.muli %[[A0]], %[[CST]]
+    %7 = arith.muli %c2, %arg2 : index
+    // CHECK-NEXT: "test.consume"(%[[MUL]])
+    "test.consume"(%7) : (index) -> ()
+  }
+  return
+}
+
 // -----
 
 // CHECK-LABEL: @remove_empty_parallel_loop
@@ -765,15 +782,15 @@ func.func @last_value(%t0: tensor<128x128xf32>, %t1: tensor<128x128xf32>,
     %m1 = bufferization.to_memref %arg2 : memref<128x128xf32>
 
     // CHECK-NEXT:   call @process(%[[M0]]) : (memref<128x128xf32>) -> ()
-    call @process(%m0) : (memref<128x128xf32>) -> ()
+    func.call @process(%m0) : (memref<128x128xf32>) -> ()
 
     // CHECK-NEXT:   call @process(%[[M1]]) : (memref<128x128xf32>) -> ()
-    call @process(%m1) : (memref<128x128xf32>) -> ()
+    func.call @process(%m1) : (memref<128x128xf32>) -> ()
 
     // This does not hoist (fails the bbArg has at most a single check).
-    // CHECK-NEXT:   %[[T:.*]] = call @process_tensor(%[[BBARG_T2]]) : (tensor<128x128xf32>) -> memref<128x128xf32>
+    // CHECK-NEXT:   %[[T:.*]] = func.call @process_tensor(%[[BBARG_T2]]) : (tensor<128x128xf32>) -> memref<128x128xf32>
     // CHECK-NEXT:   %[[YIELD_T:.*]] = bufferization.to_tensor %[[T:.*]]
-    %m2 = call @process_tensor(%arg3): (tensor<128x128xf32>) -> memref<128x128xf32>
+    %m2 = func.call @process_tensor(%arg3): (tensor<128x128xf32>) -> memref<128x128xf32>
     %3 = bufferization.to_tensor %m2 : memref<128x128xf32>
 
     // All this stuff goes away, incrementally
@@ -833,31 +850,29 @@ func.func @fold_away_iter_and_result_with_no_use(%arg0 : i32,
 
 func.func private @do(%arg0: tensor<?x?xf32>) -> tensor<?x?xf32>
 
-// CHECK-LABEL: matmul_on_tensors
-//  CHECK-SAME:   %[[T0:[0-9a-z]*]]: tensor<32x1024xf32>
-//  CHECK-SAME:   %[[T1:[0-9a-z]*]]: tensor<1024x1024xf32>
-func.func @matmul_on_tensors(%t0: tensor<32x1024xf32>, %t1: tensor<1024x1024xf32>) -> tensor<1024x1024xf32> {
+func.func @matmul_on_tensors(%t0: tensor<32x1024xf32>) -> tensor<?x?xf32> {
   %c0 = arith.constant 0 : index
   %c32 = arith.constant 32 : index
   %c1024 = arith.constant 1024 : index
+  %0 = tensor.cast %t0 : tensor<32x1024xf32> to tensor<?x?xf32>
+  %1 = scf.for %i = %c0 to %c1024 step %c32 iter_args(%iter_t0 = %0) -> (tensor<?x?xf32>) {
+    %2 = func.call @do(%iter_t0) : (tensor<?x?xf32>) -> tensor<?x?xf32>
+    scf.yield %2 : tensor<?x?xf32>
+  } {some_attr}
+  return %1 : tensor<?x?xf32>
+}
+// CHECK-LABEL: matmul_on_tensors
+//  CHECK-SAME:   %[[T0:[0-9a-z]*]]: tensor<32x1024xf32>
+
 //   CHECK-NOT: tensor.cast
 //       CHECK: %[[FOR_RES:.*]] = scf.for {{.*}} iter_args(%[[ITER_T0:.*]] = %[[T0]]) -> (tensor<32x1024xf32>) {
 //       CHECK:   %[[CAST:.*]] = tensor.cast %[[ITER_T0]] : tensor<32x1024xf32> to tensor<?x?xf32>
-//       CHECK:   %[[DONE:.*]] = call @do(%[[CAST]]) : (tensor<?x?xf32>) -> tensor<?x?xf32>
+//       CHECK:   %[[DONE:.*]] = func.call @do(%[[CAST]]) : (tensor<?x?xf32>) -> tensor<?x?xf32>
 //       CHECK:   %[[UNCAST:.*]] = tensor.cast %[[DONE]] : tensor<?x?xf32> to tensor<32x1024xf32>
 //       CHECK:   scf.yield %[[UNCAST]] : tensor<32x1024xf32>
-  %0 = tensor.cast %t0 : tensor<32x1024xf32> to tensor<?x?xf32>
-  %1 = scf.for %i = %c0 to %c1024 step %c32 iter_args(%iter_t0 = %0) -> (tensor<?x?xf32>) {
-    %2 = call @do(%iter_t0) : (tensor<?x?xf32>) -> tensor<?x?xf32>
-    scf.yield %2 : tensor<?x?xf32>
-  }
-//   CHECK-NOT: tensor.cast
-//       CHECK: %[[RES:.*]] = tensor.insert_slice %[[FOR_RES]] into %[[T1]][0, 0] [32, 1024] [1, 1] : tensor<32x1024xf32> into tensor<1024x1024xf32>
-//       CHECK: return %[[RES]] : tensor<1024x1024xf32>
-  %2 = tensor.cast %1 : tensor<?x?xf32> to tensor<32x1024xf32>
-  %res = tensor.insert_slice %2 into %t1[0, 0] [32, 1024] [1, 1] : tensor<32x1024xf32> into tensor<1024x1024xf32>
-  return %res : tensor<1024x1024xf32>
-}
+//       CHECK: } {some_attr}
+//       CHECK: %[[RES:.*]] = tensor.cast
+//       CHECK: return %[[RES]] : tensor<?x?xf32>
 
 // -----
 
@@ -985,7 +1000,7 @@ func.func @while_cond_true() -> i1 {
 // CHECK-NEXT:           %[[cmp:.+]] = "test.condition"() : () -> i1
 // CHECK-NEXT:           scf.condition(%[[cmp]]) %[[cmp]] : i1
 // CHECK-NEXT:         } do {
-// CHECK-NEXT:         ^bb0(%arg0: i1):  
+// CHECK-NEXT:         ^bb0(%arg0: i1):
 // CHECK-NEXT:           "test.use"(%[[true]]) : (i1) -> ()
 // CHECK-NEXT:           scf.yield
 // CHECK-NEXT:         }
@@ -1008,7 +1023,7 @@ func.func @while_unused_arg(%x : i32, %y : f64) -> i32 {
 // CHECK-NEXT:           %[[cmp:.*]] = "test.condition"(%[[arg2]]) : (i32) -> i1
 // CHECK-NEXT:           scf.condition(%[[cmp]]) %[[arg2]] : i32
 // CHECK-NEXT:         } do {
-// CHECK-NEXT:         ^bb0(%[[post:.+]]: i32):  
+// CHECK-NEXT:         ^bb0(%[[post:.+]]: i32):
 // CHECK-NEXT:           %[[next:.+]] = "test.use"(%[[post]]) : (i32) -> i32
 // CHECK-NEXT:           scf.yield %[[next]] : i32
 // CHECK-NEXT:         }
@@ -1036,9 +1051,9 @@ func.func @invariant_loop_args_in_same_order(%f_arg0: tensor<i32>) -> (tensor<i3
   }
   return %0#0, %0#1, %0#2, %0#3, %0#4 : tensor<i32>, tensor<i32>, tensor<i32>, tensor<i32>, tensor<i32>
 }
-// CHECK:    %[[CST42:.*]] = arith.constant dense<42>
-// CHECK:    %[[ONE:.*]] = arith.constant dense<1>
 // CHECK:    %[[ZERO:.*]] = arith.constant dense<0>
+// CHECK:    %[[ONE:.*]] = arith.constant dense<1>
+// CHECK:    %[[CST42:.*]] = arith.constant dense<42>
 // CHECK:    %[[WHILE:.*]]:3 = scf.while (%[[ARG0:.*]] = %[[ZERO]], %[[ARG2:.*]] = %[[ONE]], %[[ARG3:.*]] = %[[ONE]])
 // CHECK:       arith.cmpi slt, %[[ARG0]], %{{.*}}
 // CHECK:       tensor.extract %{{.*}}[]
@@ -1052,13 +1067,13 @@ func.func @invariant_loop_args_in_same_order(%f_arg0: tensor<i32>) -> (tensor<i3
 // CHECK:    return %[[WHILE]]#0, %[[FUNC_ARG0]], %[[WHILE]]#1, %[[WHILE]]#2, %[[ZERO]]
 
 // CHECK-LABEL: @while_loop_invariant_argument_different_order
-func.func @while_loop_invariant_argument_different_order() -> (tensor<i32>, tensor<i32>, tensor<i32>, tensor<i32>, tensor<i32>, tensor<i32>) {
+func.func @while_loop_invariant_argument_different_order(%arg : tensor<i32>) -> (tensor<i32>, tensor<i32>, tensor<i32>, tensor<i32>, tensor<i32>, tensor<i32>) {
   %cst_0 = arith.constant dense<0> : tensor<i32>
   %cst_1 = arith.constant dense<1> : tensor<i32>
   %cst_42 = arith.constant dense<42> : tensor<i32>
 
   %0:6 = scf.while (%arg0 = %cst_0, %arg1 = %cst_1, %arg2 = %cst_1, %arg3 = %cst_1, %arg4 = %cst_0) : (tensor<i32>, tensor<i32>, tensor<i32>, tensor<i32>, tensor<i32>) -> (tensor<i32>, tensor<i32>, tensor<i32>, tensor<i32>, tensor<i32>, tensor<i32>) {
-    %1 = arith.cmpi slt, %arg0, %cst_42 : tensor<i32>
+    %1 = arith.cmpi slt, %arg0, %arg : tensor<i32>
     %2 = tensor.extract %1[] : tensor<i1>
     scf.condition(%2) %arg1, %arg0, %arg2, %arg0, %arg3, %arg4 : tensor<i32>, tensor<i32>, tensor<i32>, tensor<i32>, tensor<i32>, tensor<i32>
   } do {
@@ -1069,11 +1084,11 @@ func.func @while_loop_invariant_argument_different_order() -> (tensor<i32>, tens
   }
   return %0#0, %0#1, %0#2, %0#3, %0#4, %0#5 : tensor<i32>, tensor<i32>, tensor<i32>, tensor<i32>, tensor<i32>, tensor<i32>
 }
-// CHECK:    %[[CST42:.*]] = arith.constant dense<42>
-// CHECK:    %[[ONE:.*]] = arith.constant dense<1>
+// CHECK-SAME: (%[[ARG:.+]]: tensor<i32>)
 // CHECK:    %[[ZERO:.*]] = arith.constant dense<0>
+// CHECK:    %[[ONE:.*]] = arith.constant dense<1>
 // CHECK:    %[[WHILE:.*]]:2 = scf.while (%[[ARG1:.*]] = %[[ONE]], %[[ARG4:.*]] = %[[ZERO]])
-// CHECK:       arith.cmpi slt, %[[ZERO]], %[[CST42]]
+// CHECK:       arith.cmpi sgt, %[[ARG]], %[[ZERO]]
 // CHECK:       tensor.extract %{{.*}}[]
 // CHECK:       scf.condition(%{{.*}}) %[[ARG1]], %[[ARG4]]
 // CHECK:    } do {
@@ -1104,7 +1119,7 @@ func.func @while_unused_result() -> i32 {
 // CHECK-NEXT:           %{{.*}} = "test.get_some_value"() : () -> i64
 // CHECK-NEXT:           scf.condition(%[[cmp]]) %[[val]] : i32
 // CHECK-NEXT:         } do {
-// CHECK-NEXT:         ^bb0(%[[arg:.*]]: i32):  
+// CHECK-NEXT:         ^bb0(%[[arg:.*]]: i32):
 // CHECK-NEXT:           "test.use"(%[[arg]]) : (i32) -> ()
 // CHECK-NEXT:           scf.yield
 // CHECK-NEXT:         }
@@ -1132,7 +1147,7 @@ func.func @while_cmp_lhs(%arg0 : i32) {
 // CHECK-NEXT:         %[[cmp:.+]] = arith.cmpi ne, %[[val]], %arg0 : i32
 // CHECK-NEXT:           scf.condition(%[[cmp]]) %[[val]] : i32
 // CHECK-NEXT:         } do {
-// CHECK-NEXT:         ^bb0(%arg1: i32):  
+// CHECK-NEXT:         ^bb0(%arg1: i32):
 // CHECK-NEXT:           "test.use"(%[[true]], %[[false]], %arg1) : (i1, i1, i32) -> ()
 // CHECK-NEXT:           scf.yield
 // CHECK-NEXT:         }
@@ -1159,7 +1174,7 @@ func.func @while_cmp_rhs(%arg0 : i32) {
 // CHECK-NEXT:         %[[cmp:.+]] = arith.cmpi ne, %arg0, %[[val]] : i32
 // CHECK-NEXT:           scf.condition(%[[cmp]]) %[[val]] : i32
 // CHECK-NEXT:         } do {
-// CHECK-NEXT:         ^bb0(%arg1: i32):  
+// CHECK-NEXT:         ^bb0(%arg1: i32):
 // CHECK-NEXT:           "test.use"(%[[true]], %[[false]], %arg1) : (i1, i1, i32) -> ()
 // CHECK-NEXT:           scf.yield
 // CHECK-NEXT:         }
@@ -1457,3 +1472,50 @@ func.func @func_execute_region_elim_multi_yield() {
 // CHECK:   ^[[bb3]](%[[z:.+]]: i64):
 // CHECK:     "test.bar"(%[[z]])
 // CHECK:     return
+
+// -----
+
+// CHECK-LABEL: func @canonicalize_parallel_insert_slice_indices(
+//  CHECK-SAME:     %[[arg0:.*]]: tensor<1x5xf32>, %[[arg1:.*]]: tensor<?x?xf32>
+func.func @canonicalize_parallel_insert_slice_indices(
+    %arg0 : tensor<1x5xf32>, %arg1: tensor<?x?xf32>, %num_threads : index) -> index
+{
+  // CHECK: %[[c1:.*]] = arith.constant 1 : index
+  %c1 = arith.constant 1 : index
+
+  %2 = scf.forall (%tidx) in (%num_threads) shared_outs(%o = %arg1) -> (tensor<?x?xf32>) {
+    scf.forall.in_parallel {
+      tensor.parallel_insert_slice %arg0 into %o[%tidx, 0] [1, 5] [1, 1] : tensor<1x5xf32> into tensor<?x?xf32>
+    }
+  }
+
+  // CHECK: %[[dim:.*]] = tensor.dim %[[arg1]], %[[c1]]
+  %dim = tensor.dim %2, %c1 : tensor<?x?xf32>
+  // CHECK: return %[[dim]]
+  return %dim : index
+}
+
+// -----
+
+// CHECK-LABEL: func @forall_fold_control_operands
+func.func @forall_fold_control_operands(
+    %arg0 : tensor<?x10xf32>, %arg1: tensor<?x10xf32>) -> tensor<?x10xf32> {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %dim0 = tensor.dim %arg0, %c0 : tensor<?x10xf32>
+  %dim1 = tensor.dim %arg0, %c1 : tensor<?x10xf32>
+
+  %result = scf.forall (%i, %j) = (%c0, %c0) to (%dim0, %dim1)
+      step (%c1, %c1) shared_outs(%o = %arg1) -> (tensor<?x10xf32>) {
+    %slice = tensor.extract_slice %arg1[%i, %j] [1, 1] [1, 1]
+      : tensor<?x10xf32> to tensor<1x1xf32>
+
+    scf.forall.in_parallel {
+      tensor.parallel_insert_slice %slice into %o[%i, %j] [1, 1] [1, 1]
+        : tensor<1x1xf32> into tensor<?x10xf32>
+    }
+  }
+
+  return %result : tensor<?x10xf32>
+}
+// CHECK: forall (%{{.*}}, %{{.*}}) in (%{{.*}}, 10)

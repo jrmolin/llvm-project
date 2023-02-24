@@ -35,6 +35,7 @@
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
+#include <optional>
 #include <utility>
 
 using namespace llvm;
@@ -96,7 +97,7 @@ static bool simplifyLoopInst(Loop &L, DominatorTree &DT, LoopInfo &LI,
         if (!IsFirstIteration && !ToSimplify->count(&I))
           continue;
 
-        Value *V = SimplifyInstruction(&I, SQ.getWithInstruction(&I));
+        Value *V = simplifyInstruction(&I, SQ.getWithInstruction(&I));
         if (!V || !LI.replacementPreservesLCSSAForm(&I, V))
           continue;
 
@@ -214,14 +215,14 @@ public:
 PreservedAnalyses LoopInstSimplifyPass::run(Loop &L, LoopAnalysisManager &AM,
                                             LoopStandardAnalysisResults &AR,
                                             LPMUpdater &) {
-  Optional<MemorySSAUpdater> MSSAU;
+  std::optional<MemorySSAUpdater> MSSAU;
   if (AR.MSSA) {
     MSSAU = MemorySSAUpdater(AR.MSSA);
     if (VerifyMemorySSA)
       AR.MSSA->verifyMemorySSA();
   }
   if (!simplifyLoopInst(L, AR.DT, AR.LI, AR.AC, AR.TLI,
-                        MSSAU.hasValue() ? MSSAU.getPointer() : nullptr))
+                        MSSAU ? &*MSSAU : nullptr))
     return PreservedAnalyses::all();
 
   auto PA = getLoopPassPreservedAnalyses();

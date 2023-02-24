@@ -11,14 +11,15 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "CodeGenRegisters.h"
+#include "CodeGenTarget.h"
+#include "InfoByHwMode.h"
+#include "TableGenBackends.h"
 #include "llvm/ADT/BitVector.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/TableGen/Error.h"
 #include "llvm/TableGen/Record.h"
 #include "llvm/TableGen/TableGenBackend.h"
-
-#include "CodeGenRegisters.h"
-#include "CodeGenTarget.h"
 
 #define DEBUG_TYPE "register-bank-emitter"
 
@@ -172,9 +173,8 @@ static void visitRegisterBankClasses(
     SmallPtrSetImpl<const CodeGenRegisterClass *> &VisitedRCs) {
 
   // Make sure we only visit each class once to avoid infinite loops.
-  if (VisitedRCs.count(RC))
+  if (!VisitedRCs.insert(RC).second)
     return;
-  VisitedRCs.insert(RC);
 
   // Visit each explicitly named class.
   VisitFn(RC, Kind.str());

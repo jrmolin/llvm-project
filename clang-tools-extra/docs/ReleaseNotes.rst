@@ -53,7 +53,6 @@ Inlay hints
 
 Diagnostics
 ^^^^^^^^^^^
-- Improved Fix-its of some clang-tidy checks when applied with clangd.
 
 Semantic Highlighting
 ^^^^^^^^^^^^^^^^^^^^^
@@ -82,8 +81,6 @@ Miscellaneous
 Improvements to clang-doc
 -------------------------
 
-The improvements are...
-
 Improvements to clang-query
 ---------------------------
 
@@ -97,87 +94,84 @@ The improvements are...
 Improvements to clang-tidy
 --------------------------
 
-- Added trace code to help narrow down any checks and the relevant source code
-  that result in crashes.
-
-- Clang-tidy now consideres newlines as separators of single elements in the `Checks` section in
-  `.clang-tidy` configuration files. Where previously a comma had to be used to distinguish elements in
-  this list from each other, newline characters now also work as separators in the parsed YAML. That
-  means it is advised to use YAML's block style initiated by the pipe character `|` for the `Checks`
-  section in order to benefit from the easier syntax that works without commas.
+- New global configuration file options `HeaderFileExtensions` and
+  `ImplementationFileExtensions`, replacing the check-local options of the
+  same name.
 
 New checks
 ^^^^^^^^^^
 
-- New :doc:`bugprone-shared-ptr-array-mismatch <clang-tidy/checks/bugprone-shared-ptr-array-mismatch>` check.
+- New :doc:`bugprone-unsafe-functions
+  <clang-tidy/checks/bugprone/unsafe-functions>` check.
 
-  Finds initializations of C++ shared pointers to non-array type that are initialized with an array.
+  Checks for functions that have safer, more secure replacements available, or
+  are considered deprecated due to design flaws.
+  This check relies heavily on, but is not exclusive to, the functions from
+  the *Annex K. "Bounds-checking interfaces"* of C11.
 
-- New :doc:`modernize-macro-to-enum
-  <clang-tidy/checks/modernize-macro-to-enum>` check.
+- New :doc:`cppcoreguidelines-avoid-capture-default-when-capturing-this
+  <clang-tidy/checks/cppcoreguidelines/avoid-capture-default-when-capturing-this>` check.
 
-  Replaces groups of adjacent macros with an unscoped anonymous enum.
+  Warns when lambda specify a capture default and capture ``this``.
 
-- New :doc:`portability-std-allocator-const <clang-tidy/checks/portability-std-allocator-const>` check.
+- New :doc: `llvmlibc-inline-function-decl
+  <clang-tidy/checks/llvmlibc/inline-function-decl>` check.
 
-  Report use of ``std::vector<const T>`` (and similar containers of const
-  elements). These are not allowed in standard C++ due to undefined
-  ``std::allocator<const T>``. They do not compile with libstdc++ or MSVC.
-  Future libc++ will remove the extension (`D120996
-  <https://reviews.llvm.org/D120996>`).
+  Checks that all implicit and explicit inline functions in header files are
+  tagged with the ``LIBC_INLINE`` macro.
 
 New check aliases
 ^^^^^^^^^^^^^^^^^
 
-- New alias :doc:`cppcoreguidelines-macro-to-enum
-  <clang-tidy/checks/cppcoreguidelines-macro-to-enum>` to :doc:`modernize-macro-to-enum
-  <clang-tidy/checks/modernize-macro-to-enum>` was added.
+- New alias :doc:`cert-msc24-c
+  <clang-tidy/checks/cert/msc24-c>` to :doc:`bugprone-unsafe-functions
+  <clang-tidy/checks/bugprone/unsafe-functions>` was added.
+
+- New alias :doc:`cert-msc33-c
+  <clang-tidy/checks/cert/msc33-c>` to :doc:`bugprone-unsafe-functions
+  <clang-tidy/checks/bugprone/unsafe-functions>` was added.
 
 Changes in existing checks
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-- Fixed nonsensical suggestion of :doc:`altera-struct-pack-align
-  <clang-tidy/checks/altera-struct-pack-align>` check for empty structs.
+- Deprecated check-local options `HeaderFileExtensions`
+  in :doc:`bugprone-dynamic-static-initializers
+  <clang-tidy/checks/bugprone/dynamic-static-initializers>` check.
+  Global options of the same name should be used instead.
 
-- Fixed some false positives in :doc:`bugprone-infinite-loop
-  <clang-tidy/checks/bugprone-infinite-loop>` involving dependent expressions.
+- Deprecated check-local options `HeaderFileExtensions` and `ImplementationFileExtensions`
+  in :doc:`bugprone-suspicious-include
+  <clang-tidy/checks/bugprone/suspicious-include>` check.
+  Global options of the same name should be used instead.
 
-- Fixed a crash in :doc:`bugprone-sizeof-expression
-  <clang-tidy/checks/bugprone-sizeof-expression>` when `sizeof(...)` is
-  compared against a `__int128_t`.
+- Deprecated check-local options `HeaderFileExtensions`
+  in :doc:`google-build-namespaces
+  <clang-tidy/checks/google/build-namespaces>` check.
+  Global options of the same name should be used instead.
 
-- Improved :doc:`cppcoreguidelines-prefer-member-initializer
-  <clang-tidy/checks/cppcoreguidelines-prefer-member-initializer>` check.
+- Deprecated check-local options `HeaderFileExtensions`
+  in :doc:`google-global-names-in-headers
+  <clang-tidy/checks/google/global-names-in-headers>` check.
+  Global options of the same name should be used instead.
 
-  Fixed an issue when there was already an initializer in the constructor and
-  the check would try to create another initializer for the same member.
+- Deprecated check-local options `HeaderFileExtensions`
+  in :doc:`llvm-header-guard
+  <clang-tidy/checks/llvm/header-guard>` check.
+  Global options of the same name should be used instead.
 
-- Fixed a crash in :doc:`llvmlibc-callee-namespace
-  <clang-tidy/checks/llvmlibc-callee-namespace>` when executing for C++ code
-  that contain calls to advanced constructs, e.g. overloaded operators.
+- Deprecated check-local options `HeaderFileExtensions`
+  in :doc:`misc-definitions-in-headers
+  <clang-tidy/checks/misc/definitions-in-headers>` check.
+  Global options of the same name should be used instead.
 
-- Fixed a false positive in :doc:`misc-redundant-expression
-  <clang-tidy/checks/misc-redundant-expression>` involving overloaded
-  comparison operators.
+- Deprecated check-local options `HeaderFileExtensions`
+  in :doc:`misc-unused-using-decls
+  <clang-tidy/checks/misc/unused-using-decls>` check.
+  Global options of the same name should be used instead.
 
-- Fixed a false positive in :doc:`misc-redundant-expression
-  <clang-tidy/checks/misc-redundant-expression>` involving assignments in
-  conditions. This fixes `Issue 35853 <https://github.com/llvm/llvm-project/issues/35853>`_.
-
-- Improved :doc:`performance-inefficient-vector-operation
-  <clang-tidy/checks/performance-inefficient-vector-operation>` to work when
-  the vector is a member of a structure.
-
-- Fixed a crash in :doc:`readability-const-return-type
-  <clang-tidy/checks/readability-const-return-type>` when a pure virtual function
-  overrided has a const return type. Removed the fix for a virtual function.
-
-- Fixed incorrect suggestions for :doc:`readability-container-size-empty
-  <clang-tidy/checks/readability-container-size-empty>` when smart pointers are involved.
-
-- Fixed a false positive in :doc:`readability-non-const-parameter
-  <clang-tidy/checks/readability-non-const-parameter>` when the parameter is
-  referenced by an lvalue.
+- Fixed reading `HungarianNotation.CString.*` options in
+  :doc:`readability-identifier-naming
+  <clang-tidy/checks/readability/identifier-naming>` check.
 
 Removed checks
 ^^^^^^^^^^^^^^
@@ -199,8 +193,6 @@ The improvements are...
 
 Improvements to pp-trace
 ------------------------
-
-The improvements are...
 
 Clang-tidy Visual Studio plugin
 -------------------------------

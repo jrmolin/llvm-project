@@ -53,8 +53,8 @@ static bool isArrayIndexOutOfBounds(CheckerContext &C, const Expr *Ex) {
   DefinedOrUnknownSVal Idx = ER->getIndex().castAs<DefinedOrUnknownSVal>();
   DefinedOrUnknownSVal ElementCount = getDynamicElementCount(
       state, ER->getSuperRegion(), C.getSValBuilder(), ER->getValueType());
-  ProgramStateRef StInBound = state->assumeInBound(Idx, ElementCount, true);
-  ProgramStateRef StOutBound = state->assumeInBound(Idx, ElementCount, false);
+  ProgramStateRef StInBound, StOutBound;
+  std::tie(StInBound, StOutBound) = state->assumeInBoundDual(Idx, ElementCount);
   return StOutBound && !StInBound;
 }
 
@@ -70,7 +70,7 @@ static bool isLeftShiftResultUnrepresentable(const BinaryOperator *B,
   const llvm::APSInt *LHS = SB.getKnownValue(State, C.getSVal(B->getLHS()));
   const llvm::APSInt *RHS = SB.getKnownValue(State, C.getSVal(B->getRHS()));
   assert(LHS && RHS && "Values unknown, inconsistent state");
-  return (unsigned)RHS->getZExtValue() > LHS->countLeadingZeros();
+  return (unsigned)RHS->getZExtValue() > LHS->countl_zero();
 }
 
 void UndefResultChecker::checkPostStmt(const BinaryOperator *B,
