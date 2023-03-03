@@ -4,6 +4,7 @@
 // RUN:         {key: bugprone-exception-escape.FunctionsThatShouldNotThrow, value: 'enabled1,enabled2,enabled3'} \
 // RUN:     ]}" \
 // RUN:     -- -fexceptions
+// FIXME: Fix the checker to work in C++17 or later mode.
 
 struct throwing_destructor {
   ~throwing_destructor() {
@@ -388,7 +389,7 @@ void throw_original_catch_alias_2() noexcept {
   }
 }
 
-{
+namespace a {
   int foo() { return 0; };
 
   void throw_regular_catch_regular() noexcept {
@@ -399,7 +400,7 @@ void throw_original_catch_alias_2() noexcept {
   }
 }
 
-{
+namespace b {
   inline int foo() { return 0; };
 
   void throw_inline_catch_regular() noexcept {
@@ -410,7 +411,7 @@ void throw_original_catch_alias_2() noexcept {
   }
 }
 
-{
+namespace c {
   inline int foo() noexcept { return 0; };
 
   void throw_noexcept_catch_regular() noexcept {
@@ -421,26 +422,62 @@ void throw_original_catch_alias_2() noexcept {
   }
 }
 
-struct baseMemberFn {
+struct baseMember {
+    int *iptr;
     virtual void foo(){};
 };
 
-struct derivedMemberFn : baseMemberFn {
+struct derivedMember : baseMember {
     void foo() override {};
 };
 
 void throw_basefn_catch_derivedfn() noexcept {
   // CHECK-MESSAGES: :[[@LINE-1]]:6: warning: an exception may be thrown in function 'throw_basefn_catch_derivedfn' which should not throw exceptions
   try {
-    throw &baseMemberFn::foo;
-  } catch(void(derivedMemberFn::*)()) {
+    throw &baseMember::foo;
+  } catch(void(derivedMember::*)()) {
   }
 }
 
 void throw_basefn_catch_basefn() noexcept {
   try {
-    throw &baseMemberFn::foo;
-  } catch(void(baseMemberFn::*)()) {
+    throw &baseMember::foo;
+  } catch(void(baseMember::*)()) {
+  }
+}
+
+void throw_basem_catch_basem_throw() noexcept {
+  // CHECK-MESSAGES: :[[@LINE-1]]:6: warning: an exception may be thrown in function 'throw_basem_catch_basem_throw' which should not throw exceptions
+  try {
+    auto ptr = &baseMember::iptr;
+    throw &ptr;
+  } catch(const int* baseMember::* const *) {
+  }
+}
+
+void throw_basem_catch_basem() noexcept {
+  try {
+    auto ptr = &baseMember::iptr;
+    throw &ptr;
+  } catch(const int* const baseMember::* const *) {
+  }
+}
+
+void throw_basem_catch_derivedm() noexcept {
+  // CHECK-MESSAGES: :[[@LINE-1]]:6: warning: an exception may be thrown in function 'throw_basem_catch_derivedm' which should not throw exceptions
+  try {
+    auto ptr = &baseMember::iptr;
+    throw &ptr;
+  } catch(const int* const derivedMember::* const *) {
+  }
+}
+
+void throw_derivedm_catch_basem() noexcept {
+  // CHECK-MESSAGES: :[[@LINE-1]]:6: warning: an exception may be thrown in function 'throw_derivedm_catch_basem' which should not throw exceptions
+  try {
+    int *derivedMember::* ptr = &derivedMember::iptr;
+    throw &ptr;
+  } catch(const int* const baseMember::* const *) {
   }
 }
 

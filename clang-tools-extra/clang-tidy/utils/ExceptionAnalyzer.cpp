@@ -83,14 +83,14 @@ inline bool isPointerOrPointerToMember(const Type *T) {
   return T->isPointerType() || T->isMemberPointerType();
 }
 
-QualType getPointeeOrArrayElementQualType(QualType T) {
-  if (T->isAnyPointerType())
+std::optional<QualType> getPointeeOrArrayElementQualType(QualType T) {
+  if (T->isAnyPointerType() || T->isMemberPointerType())
     return T->getPointeeType();
 
   if (T->isArrayType())
     return T->getAsArrayTypeUnsafe()->getElementType();
 
-  return T;
+  return std::nullopt;
 }
 
 bool isBaseOf(const Type *DerivedType, const Type *BaseType) {
@@ -149,11 +149,11 @@ bool isStandardPointerConvertible(QualType From, QualType To) {
 }
 
 bool isFunctionPointerConvertible(QualType From, QualType To) {
-  if (!From->isFunctionPointerType() || !From->isFunctionType() ||
+  if (!From->isFunctionPointerType() && !From->isFunctionType() &&
       !From->isMemberFunctionPointerType())
     return false;
 
-  if (!To->isFunctionPointerType() || !To->isMemberFunctionPointerType())
+  if (!To->isFunctionPointerType() && !To->isMemberFunctionPointerType())
     return false;
 
   if (To->isFunctionPointerType()) {
@@ -291,8 +291,17 @@ bool isQualificationConvertiblePointer(QualType From, QualType To,
     }
 
     ++I;
-    From = getPointeeOrArrayElementQualType(From);
-    To = getPointeeOrArrayElementQualType(To);
+    std::optional<QualType> FromPointeeOrElem =
+        getPointeeOrArrayElementQualType(From);
+    std::optional<QualType> ToPointeeOrElem =
+        getPointeeOrArrayElementQualType(To);
+
+    assert(FromPointeeOrElem &&
+           "From pointer or array has no pointee or element!");
+    assert(ToPointeeOrElem && "To pointer or array has no pointee or element!");
+
+    From = *FromPointeeOrElem;
+    To = *ToPointeeOrElem;
   }
 
   // In this case the length (n) of From and To are not the same.
