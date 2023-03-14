@@ -174,12 +174,9 @@ void Instrumentation::createLeafNodeDescription(FunctionDescription &FuncDesc,
 InstructionListType
 Instrumentation::createInstrumentationSnippet(BinaryContext &BC, bool IsLeaf) {
   auto L = BC.scopeLock();
-  MCSymbol *Label;
-  Label = BC.Ctx->createNamedTempSymbol("InstrEntry");
+  MCSymbol *Label = BC.Ctx->createNamedTempSymbol("InstrEntry");
   Summary->Counters.emplace_back(Label);
-  InstructionListType CounterInstrs;
-  BC.MIB->createInstrIncMemory(CounterInstrs, Label, &*BC.Ctx, IsLeaf);
-  return CounterInstrs;
+  return BC.MIB->createInstrIncMemory(Label, BC.Ctx.get(), IsLeaf);
 }
 
 // Helper instruction sequence insertion function
@@ -231,8 +228,9 @@ bool Instrumentation::instrumentOneTarget(
     BinaryBasicBlock &FromBB, uint32_t From, BinaryFunction &ToFunc,
     BinaryBasicBlock *TargetBB, uint32_t ToOffset, bool IsLeaf, bool IsInvoke,
     FunctionDescription *FuncDesc, uint32_t FromNodeID, uint32_t ToNodeID) {
+  BinaryContext &BC = FromFunction.getBinaryContext();
   {
-    auto L = FromFunction.getBinaryContext().scopeLock();
+    auto L = BC.scopeLock();
     bool Created = true;
     if (!TargetBB)
       Created = createCallDescription(*FuncDesc, FromFunction, From, FromNodeID,
@@ -245,10 +243,8 @@ bool Instrumentation::instrumentOneTarget(
       return false;
   }
 
-  InstructionListType CounterInstrs =
-      createInstrumentationSnippet(FromFunction.getBinaryContext(), IsLeaf);
+  InstructionListType CounterInstrs = createInstrumentationSnippet(BC, IsLeaf);
 
-  BinaryContext &BC = FromFunction.getBinaryContext();
   const MCInst &Inst = *Iter;
   if (BC.MIB->isCall(Inst)) {
     // This code handles both
@@ -357,12 +353,13 @@ void Instrumentation::instrumentFunction(BinaryFunction &Function,
   // instructions to protect the red zone
   bool IsLeafFunction = true;
   DenseSet<const BinaryBasicBlock *> InvokeBlocks;
-  for (auto BBI = Function.begin(), BBE = Function.end(); BBI != BBE; ++BBI) {
-    for (auto I = BBI->begin(), E = BBI->end(); I != E; ++I) {
-      if (BC.MIB->isCall(*I)) {
-        if (BC.MIB->isInvoke(*I))
-          InvokeBlocks.insert(&*BBI);
-        IsLeafFunction = false;
+  for (const BinaryBasicBlock &BB : Function) {
+    for (const MCInst &Inst : BB) {
+      if (BC.MIB->isCall(Inst)) {
+        if (BC.MIB->isInvoke(Inst))
+          InvokeBlocks.insert(&BB);
+        if (!BC.MIB->isTailCall(Inst))
+          IsLeafFunction = false;
       }
     }
   }
