@@ -25313,6 +25313,31 @@ TEST_F(FormatTest, SpaceAfterUDL) {
   verifyFormat("auto x = 5s .count() == 5;");
 }
 
+TEST_F(FormatTest, BreakBeforeParameterList) {
+  FormatStyle Style = getLLVMStyle();
+  const StringRef Code("int function1(int param1, int param2, int param3);\n"
+                       "int function2();\n");
+
+  // verify that there is no break by default
+  verifyFormat("int\n"
+               "function1(int param1,\n"
+               "          int param2,\n"
+               "          int param3);\n"
+               "int\n"
+               "function2();\n",
+               Code, Style);
+
+  // verify that there is a break when told to break
+  Style.AlwaysBreakBeforeFunctionParameters = true;
+  verifyFormat("int\n"
+               "function1(\n"
+               "    int param1,\n"
+               "    int param2,\n"
+               "    int param3);\n"
+               "int\n"
+               "function2();\n",
+               Code, Style);
+}
 } // namespace
 } // namespace test
 } // namespace format

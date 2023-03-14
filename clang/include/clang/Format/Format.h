@@ -807,6 +807,16 @@ struct FormatStyle {
   /// \version 3.8
   ReturnTypeBreakingStyle AlwaysBreakAfterReturnType;
 
+  /// \brief Always break before function parameters in a declaration, e.g.:
+  /// \code
+  ///   int
+  ///   someFunction(
+  ///       int argument1,
+  ///       int argument2);
+  /// \endcode
+  /// \version 17
+  bool AlwaysBreakBeforeFunctionParameters;
+
   /// If ``true``, always break before multiline string literals.
   ///
   /// This flag is mean to make cases where there are multiple multiline strings
@@ -821,14 +831,6 @@ struct FormatStyle {
   /// \endcode
   /// \version 3.4
   bool AlwaysBreakBeforeMultilineStrings;
-
-  /// \brief Always break before function parameters in a declaration, e.g.:
-  /// \code
-  ///   someFunction(
-  ///       int argument1,
-  ///       int argument2);
-  /// \endcode
-  bool AlwaysBreakBeforeFunctionParameters;
 
   /// Different ways to break after the template declaration.
   enum BreakTemplateDeclarationsStyle : int8_t {

@@ -1327,6 +1327,7 @@ FormatStyle getLLVMStyle(FormatStyle::LanguageKind Language) {
   LLVMStyle.AllowShortLoopsOnASingleLine = false;
   LLVMStyle.AlwaysBreakAfterReturnType = FormatStyle::RTBS_None;
   LLVMStyle.AlwaysBreakAfterDefinitionReturnType = FormatStyle::DRTBS_None;
+  LLVMStyle.AlwaysBreakBeforeFunctionParameters = false;
   LLVMStyle.AlwaysBreakBeforeMultilineStrings = false;
   LLVMStyle.AlwaysBreakTemplateDeclarations = FormatStyle::BTDS_MultiLine;
   LLVMStyle.AttributeMacros.push_back("__capability");
@@ -1507,7 +1508,6 @@ FormatStyle getGoogleStyle(FormatStyle::LanguageKind Language) {
       FormatStyle::SIS_WithoutElse;
   GoogleStyle.AllowShortLoopsOnASingleLine = true;
   GoogleStyle.AlwaysBreakBeforeMultilineStrings = true;
-  GoogleStyle.AlwaysBreakBeforeFunctionParameters = false;
   GoogleStyle.AlwaysBreakTemplateDeclarations = FormatStyle::BTDS_Yes;
   GoogleStyle.DerivePointerAlignment = true;
   GoogleStyle.IncludeStyle.IncludeCategories = {{"^<ext/.*\\.h>", 2, 0, false},
@@ -1580,7 +1580,6 @@ FormatStyle getGoogleStyle(FormatStyle::LanguageKind Language) {
     GoogleStyle.AllowShortFunctionsOnASingleLine = FormatStyle::SFS_Empty;
     GoogleStyle.AllowShortIfStatementsOnASingleLine = FormatStyle::SIS_Never;
     GoogleStyle.AlwaysBreakBeforeMultilineStrings = false;
-    GoogleStyle.AlwaysBreakBeforeFunctionParameters = false;
     GoogleStyle.BreakBeforeBinaryOperators = FormatStyle::BOS_NonAssignment;
     GoogleStyle.ColumnLimit = 100;
     GoogleStyle.SpaceAfterCStyleCast = true;
@@ -1592,7 +1591,6 @@ FormatStyle getGoogleStyle(FormatStyle::LanguageKind Language) {
     // TODO: still under discussion whether to switch to SLS_All.
     GoogleStyle.AllowShortLambdasOnASingleLine = FormatStyle::SLS_Empty;
     GoogleStyle.AlwaysBreakBeforeMultilineStrings = false;
-    GoogleStyle.AlwaysBreakBeforeFunctionParameters = false;
     GoogleStyle.BreakBeforeTernaryOperators = false;
     // taze:, triple slash directives (`/// <...`), tslint:, and @see, which is
     // commonly followed by overlong URLs.
@@ -1618,7 +1616,6 @@ FormatStyle getGoogleStyle(FormatStyle::LanguageKind Language) {
     GoogleStyle.BreakStringLiterals = false;
   } else if (Language == FormatStyle::LK_ObjC) {
     GoogleStyle.AlwaysBreakBeforeMultilineStrings = false;
-    GoogleStyle.AlwaysBreakBeforeFunctionParameters = false;
     GoogleStyle.ColumnLimit = 100;
     // "Regroup" doesn't work well for ObjC yet (main header heuristic,
     // relationship between ObjC standard library headers and other heades,
