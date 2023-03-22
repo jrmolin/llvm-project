@@ -1370,21 +1370,21 @@ the configuration (without a prefix: ``Auto``).
 
 .. _AlwaysBreakBeforeFunctionParameters:
 
-**AlwaysBreakBeforeFunctionParameters** (``Boolean``) :versionbadge:`clang-format 16.0`
-  If ``true``, always break before function parameters.
+**AlwaysBreakBeforeFunctionParameters** (``Boolean``) :versionbadge:`clang-format 16` :ref:`¶ <AlwaysBreakBeforeFunctionParameters>`
+  If ``true``, always break before function parameters in a declaration.
 
   This flag is meant to align function parameters starting on the line following
-  a function declaration or definition. Thus, it will only take effect if a function
-  declares a parameter (or multiple parameters). Example uses ``AlwaysBreakAfterReturnType``
-  set to ``All``.
+  a function declaration or definition. Thus, it will only take effect if a
+  function declares a parameter (or multiple parameters). Example uses
+  ``AlwaysBreakAfterReturnType`` set to ``All``.
 
   .. code-block:: c++
 
      true:                                  false:
      int                            vs.     int
-     add_two_numbers(                       add_two_numbers(int a,
-         int a,                                 int b);
-         int b);
+     someFunction(                          someFunction(int argument1, int argument2);
+         int argument1,
+         int argument2);
 
 .. _AlwaysBreakBeforeMultilineStrings:
 
@@ -3659,6 +3659,43 @@ the configuration (without a prefix: ``Auto``).
 
 **MacroBlockEnd** (``String``) :versionbadge:`clang-format 3.7` :ref:`¶ <MacroBlockEnd>`
   A regular expression matching macros that end a block.
+
+.. _Macros:
+
+**Macros** (``List of Strings``) :ref:`¶ <Macros>`
+  A list of macros of the form ``<definition>=<expansion>`` .
+
+  Code will be parsed with macros expanded, in order to determine how to
+  interpret and format the macro arguments.
+
+  For example, the code:
+
+  .. code-block:: c++
+
+    A(a*b);
+  will usually be interpreted as a call to a function A, and the
+  multiplication expression will be formatted as `a * b`.
+
+  If we specify the macro definition:
+
+  .. code-block:: c++
+
+    Macros:
+    - A(x)=x
+  the code will now be parsed as a declaration of the variable b of type a*,
+  and formatted as `a* b` (depending on pointer-binding rules).
+
+  Features and restrictions:
+  *  Both function-like macros and object-like macros are supported.
+  *  Macro arguments must be used exactly once in the expansion.
+  *  No recursive expansion; macros referencing other macros will be
+     ignored.
+  *  Overloading by arity is supported: for example, given the macro
+     definitions A=x, A()=y, A(a)=a,
+     'A;' -> 'x;'
+     'A();' -> 'y;'
+     'A(z);' -> 'z;'
+     'A(a, b) will not be expanded.
 
 .. _MaxEmptyLinesToKeep:
 

@@ -807,14 +807,20 @@ struct FormatStyle {
   /// \version 3.8
   ReturnTypeBreakingStyle AlwaysBreakAfterReturnType;
 
-  /// \brief Always break before function parameters in a declaration, e.g.:
+  /// If ``true``, always break before function parameters in a declaration.
+  ///
+  /// This flag is meant to align function parameters starting on the line following
+  /// a function declaration or definition. Thus, it will only take effect if a
+  /// function declares a parameter (or multiple parameters). Example uses
+  /// ``AlwaysBreakAfterReturnType`` set to ``All``.
   /// \code
-  ///   int
-  ///   someFunction(
-  ///       int argument1,
-  ///       int argument2);
+  ///    true:                                  false:
+  ///    int                            vs.     int
+  ///    someFunction(                          someFunction(int argument1, int argument2);
+  ///        int argument1,
+  ///        int argument2);
   /// \endcode
-  /// \version 17
+  /// \version 16
   bool AlwaysBreakBeforeFunctionParameters;
 
   /// If ``true``, always break before multiline string literals.
