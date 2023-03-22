@@ -805,6 +805,9 @@ RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
       setOperationAction(FloatingPointVPOps, VT, Custom);
 
       setOperationAction(ISD::STRICT_FP_EXTEND, VT, Custom);
+      setOperationAction({ISD::STRICT_FADD, ISD::STRICT_FSUB, ISD::STRICT_FMUL,
+                          ISD::STRICT_FDIV},
+                         VT, Legal);
     };
 
     // Sets common extload/truncstore actions on RVV floating-point vector
@@ -1019,6 +1022,9 @@ RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
         setOperationAction(FloatingPointVPOps, VT, Custom);
 
         setOperationAction(ISD::STRICT_FP_EXTEND, VT, Custom);
+        setOperationAction({ISD::STRICT_FADD, ISD::STRICT_FSUB,
+                            ISD::STRICT_FMUL, ISD::STRICT_FDIV},
+                           VT, Custom);
       }
 
       // Custom-legalize bitcasts from fixed-length vectors to scalar types.
@@ -1539,22 +1545,26 @@ bool RISCVTargetLowering::isOffsetFoldingLegal(
   return false;
 }
 
-bool RISCVTargetLowering::isLegalZfaFPImm(const APFloat &Imm, EVT VT) const {
-  if (!Subtarget.hasStdExtZfa() || !VT.isSimple())
-    return false;
+// Returns 0-31 if the fli instruction is available for the type and this is
+// legal FP immediate for the type. Returns -1 otherwise.
+int RISCVTargetLowering::getLegalZfaFPImm(const APFloat &Imm, EVT VT) const {
+  if (!Subtarget.hasStdExtZfa())
+    return -1;
 
-  switch (VT.getSimpleVT().SimpleTy) {
-  default:
-    return false;
-  case MVT::f16:
-    return (Subtarget.hasStdExtZfh() || Subtarget.hasStdExtZvfh()) &&
-           RISCVLoadFPImm::getLoadFP16Imm(Imm) != -1;
-  case MVT::f32:
-    return RISCVLoadFPImm::getLoadFP32Imm(Imm) != -1;
-  case MVT::f64:
+  bool IsSupportedVT = false;
+  if (VT == MVT::f16) {
+    IsSupportedVT = Subtarget.hasStdExtZfh() || Subtarget.hasStdExtZvfh();
+  } else if (VT == MVT::f32) {
+    IsSupportedVT = true;
+  } else if (VT == MVT::f64) {
     assert(Subtarget.hasStdExtD() && "Expect D extension");
-    return RISCVLoadFPImm::getLoadFP64Imm(Imm) != -1;
+    IsSupportedVT = true;
   }
+
+  if (!IsSupportedVT)
+    return -1;
+
+  return RISCVLoadFPImm::getLoadFPImm(Imm);
 }
 
 bool RISCVTargetLowering::isFPImmLegal(const APFloat &Imm, EVT VT,
@@ -1570,7 +1580,7 @@ bool RISCVTargetLowering::isFPImmLegal(const APFloat &Imm, EVT VT,
   if (!IsLegalVT)
     return false;
 
-  if (isLegalZfaFPImm(Imm, VT))
+  if (getLegalZfaFPImm(Imm, VT) >= 0)
     return true;
 
   // Cannot create a 64 bit floating-point immediate value for rv32.
@@ -4431,6 +4441,18 @@ SDValue RISCVTargetLowering::LowerOperation(SDValue Op,
     return lowerFixedLengthVectorSelectToRVV(Op, DAG);
   case ISD::FCOPYSIGN:
     return lowerFixedLengthVectorFCOPYSIGNToRVV(Op, DAG);
+  case ISD::STRICT_FADD:
+    return lowerToScalableOp(Op, DAG, RISCVISD::STRICT_FADD_VL,
+                             /*HasMergeOp*/ true);
+  case ISD::STRICT_FSUB:
+    return lowerToScalableOp(Op, DAG, RISCVISD::STRICT_FSUB_VL,
+                             /*HasMergeOp*/ true);
+  case ISD::STRICT_FMUL:
+    return lowerToScalableOp(Op, DAG, RISCVISD::STRICT_FMUL_VL,
+                             /*HasMergeOp*/ true);
+  case ISD::STRICT_FDIV:
+    return lowerToScalableOp(Op, DAG, RISCVISD::STRICT_FDIV_VL,
+                             /*HasMergeOp*/ true);
   case ISD::MGATHER:
   case ISD::VP_GATHER:
     return lowerMaskedGather(Op, DAG);
@@ -7345,6 +7367,16 @@ SDValue RISCVTargetLowering::lowerToScalableOp(SDValue Op, SelectionDAG &DAG,
   if (HasMask)
     Ops.push_back(Mask);
   Ops.push_back(VL);
+
+  // StrictFP operations have two result values. Their lowered result should
+  // have same result count.
+  if (Op->isStrictFPOpcode()) {
+    SDValue ScalableRes =
+        DAG.getNode(NewOpc, DL, DAG.getVTList(ContainerVT, MVT::Other), Ops,
+                    Op->getFlags());
+    SDValue SubVec = convertFromScalableVector(VT, ScalableRes, DAG, Subtarget);
+    return DAG.getMergeValues({SubVec, ScalableRes.getValue(1)}, DL);
+  }
 
   SDValue ScalableRes =
       DAG.getNode(NewOpc, DL, ContainerVT, Ops, Op->getFlags());
@@ -10884,6 +10916,18 @@ SDValue RISCVTargetLowering::PerformDAGCombine(SDNode *N,
         SDValue Neg = DAG.getNegative(C, DL, VT);
         return DAG.getNode(ISD::AND, DL, VT, Neg, TrueV);
       }
+      // (riscvisd::select_cc x, 0, ne, x, 1) -> (add x, (setcc x, 0, eq))
+      // (riscvisd::select_cc x, 0, eq, 1, x) -> (add x, (setcc x, 0, eq))
+      if (((isOneConstant(FalseV) && LHS == TrueV &&
+            CCVal == ISD::CondCode::SETNE) ||
+           (isOneConstant(TrueV) && LHS == FalseV &&
+            CCVal == ISD::CondCode::SETEQ)) &&
+          isNullConstant(RHS)) {
+        // freeze it to be safe.
+        LHS = DAG.getFreeze(LHS);
+        SDValue C = DAG.getSetCC(DL, VT, LHS, RHS, ISD::CondCode::SETEQ);
+        return DAG.getNode(ISD::ADD, DL, VT, LHS, C);
+      }
     }
 
     return SDValue();
@@ -12767,9 +12811,10 @@ static bool CC_RISCV(const DataLayout &DL, RISCVABI::ABI ABI, unsigned ValNo,
     return false;
   }
 
-  // When a floating-point value is passed on the stack, no bit-conversion is
-  // needed.
-  if (ValVT.isFloatingPoint()) {
+  // When a scalar floating-point value is passed on the stack, no
+  // bit-conversion is needed.
+  if (ValVT.isFloatingPoint() && LocInfo != CCValAssign::Indirect) {
+    assert(!ValVT.isVector());
     LocVT = ValVT;
     LocInfo = CCValAssign::Full;
   }
@@ -13996,8 +14041,12 @@ const char *RISCVTargetLowering::getTargetNodeName(unsigned Opcode) const {
   NODE_NAME_CASE(VFCVT_RM_F_XU_VL)
   NODE_NAME_CASE(VFCVT_RM_F_X_VL)
   NODE_NAME_CASE(FP_EXTEND_VL)
-  NODE_NAME_CASE(STRICT_FP_EXTEND_VL)
   NODE_NAME_CASE(FP_ROUND_VL)
+  NODE_NAME_CASE(STRICT_FADD_VL)
+  NODE_NAME_CASE(STRICT_FSUB_VL)
+  NODE_NAME_CASE(STRICT_FMUL_VL)
+  NODE_NAME_CASE(STRICT_FDIV_VL)
+  NODE_NAME_CASE(STRICT_FP_EXTEND_VL)
   NODE_NAME_CASE(VWMUL_VL)
   NODE_NAME_CASE(VWMULU_VL)
   NODE_NAME_CASE(VWMULSU_VL)

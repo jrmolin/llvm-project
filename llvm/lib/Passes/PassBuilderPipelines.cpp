@@ -57,6 +57,7 @@
 #include "llvm/Transforms/IPO/InferFunctionAttrs.h"
 #include "llvm/Transforms/IPO/Inliner.h"
 #include "llvm/Transforms/IPO/LowerTypeTests.h"
+#include "llvm/Transforms/IPO/MemProfContextDisambiguation.h"
 #include "llvm/Transforms/IPO/MergeFunctions.h"
 #include "llvm/Transforms/IPO/ModuleInliner.h"
 #include "llvm/Transforms/IPO/OpenMPOpt.h"
@@ -270,6 +271,10 @@ static cl::opt<AttributorRunOption> AttributorRun(
                           "enable call graph SCC attributor runs"),
                clEnumValN(AttributorRunOption::NONE, "none",
                           "disable attributor runs")));
+
+cl::opt<bool> EnableMemProfContextDisambiguation(
+    "enable-memprof-context-disambiguation", cl::init(false), cl::Hidden,
+    cl::ZeroOrMore, cl::desc("Enable MemProf context disambiguation"));
 
 PipelineTuningOptions::PipelineTuningOptions() {
   LoopInterleaving = true;
@@ -968,14 +973,6 @@ PassBuilder::buildModuleSimplificationPipeline(OptimizationLevel Level,
   if (Level == OptimizationLevel::O3)
     EarlyFPM.addPass(CallSiteSplittingPass());
 
-  // In SamplePGO ThinLTO backend, we need instcombine before profile annotation
-  // to convert bitcast to direct calls so that they can be inlined during the
-  // profile annotation prepration step.
-  // More details about SamplePGO design can be found in:
-  // https://research.google.com/pubs/pub45290.html
-  // FIXME: revisit how SampleProfileLoad/Inliner/ICP is structured.
-  if (LoadSampleProfile)
-    EarlyFPM.addPass(InstCombinePass());
   MPM.addPass(createModuleToFunctionPassAdaptor(std::move(EarlyFPM),
                                                 PTO.EagerlyInvalidateAnalyses));
 
@@ -1406,8 +1403,8 @@ PassBuilder::buildModuleOptimizationPipeline(OptimizationLevel Level,
 ModulePassManager
 PassBuilder::buildPerModuleDefaultPipeline(OptimizationLevel Level,
                                            bool LTOPreLink) {
-  assert(Level != OptimizationLevel::O0 &&
-         "Must request optimizations for the default pipeline!");
+  if (Level == OptimizationLevel::O0)
+    return buildO0DefaultPipeline(Level, LTOPreLink);
 
   ModulePassManager MPM;
 
@@ -1448,8 +1445,8 @@ PassBuilder::buildPerModuleDefaultPipeline(OptimizationLevel Level,
 
 ModulePassManager
 PassBuilder::buildThinLTOPreLinkDefaultPipeline(OptimizationLevel Level) {
-  assert(Level != OptimizationLevel::O0 &&
-         "Must request optimizations for the default pipeline!");
+  if (Level == OptimizationLevel::O0)
+    return buildO0DefaultPipeline(Level, /*LTOPreLink*/true);
 
   ModulePassManager MPM;
 
@@ -1560,8 +1557,6 @@ ModulePassManager PassBuilder::buildThinLTODefaultPipeline(
 
 ModulePassManager
 PassBuilder::buildLTOPreLinkDefaultPipeline(OptimizationLevel Level) {
-  assert(Level != OptimizationLevel::O0 &&
-         "Must request optimizations for the default pipeline!");
   // FIXME: We should use a customized pre-link pipeline!
   return buildPerModuleDefaultPipeline(Level,
                                        /* LTOPreLink */ true);
@@ -1718,6 +1713,12 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level,
       /* MandatoryFirst */ true,
       InlineContext{ThinOrFullLTOPhase::FullLTOPostLink,
                     InlinePass::CGSCCInliner}));
+
+  // Perform context disambiguation after inlining, since that would reduce the
+  // amount of additional cloning required to distinguish the allocation
+  // contexts.
+  if (EnableMemProfContextDisambiguation)
+    MPM.addPass(MemProfContextDisambiguation());
 
   // Optimize globals again after we ran the inliner.
   MPM.addPass(GlobalOptPass());

@@ -318,9 +318,10 @@ private:
       // export type X = (...);
       Contexts.back().IsExpression = false;
     } else if (OpeningParen.Previous &&
-               (OpeningParen.Previous->isOneOf(tok::kw_static_assert,
-                                               tok::kw_while, tok::l_paren,
-                                               tok::comma, TT_BinaryOperator) ||
+               (OpeningParen.Previous->isOneOf(
+                    tok::kw_static_assert, tok::kw_noexcept, tok::kw_explicit,
+                    tok::kw_while, tok::l_paren, tok::comma,
+                    TT_BinaryOperator) ||
                 OpeningParen.Previous->isIf())) {
       // static_assert, if and while usually contain expressions.
       Contexts.back().IsExpression = true;
@@ -1222,7 +1223,8 @@ private:
           next();
         else
           consumeToken();
-        assert(CurrentToken);
+        if (!CurrentToken)
+          break;
         auto Previous = CurrentToken->getPreviousNonComment();
         assert(Previous);
         if (CurrentToken->is(tok::comma) && Previous->isNot(tok::kw_operator))
@@ -4426,8 +4428,6 @@ bool TokenAnnotator::spaceRequiredBefore(const AnnotatedLine &Line,
          Line.First->isOneOf(tok::kw_default, tok::kw_case))) {
       return Style.SpaceBeforeCaseColon;
     }
-    if (Line.First->isOneOf(tok::kw_default, tok::kw_case))
-      return Style.SpaceBeforeCaseColon;
     const FormatToken *Next = Right.getNextNonComment();
     if (!Next || Next->is(tok::semi))
       return false;

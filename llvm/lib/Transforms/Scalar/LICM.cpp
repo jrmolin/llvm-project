@@ -1229,10 +1229,6 @@ bool llvm::canSinkOrHoistInst(Instruction &I, AAResults *AA, DominatorTree *DT,
       // Assumes don't actually alias anything or throw
       return true;
 
-    if (match(CI, m_Intrinsic<Intrinsic::experimental_widenable_condition>()))
-      // Widenable conditions don't actually alias anything or throw
-      return true;
-
     // Handle simple cases by querying alias analysis.
     MemoryEffects Behavior = AA->getMemoryEffects(CI);
     if (Behavior.doesNotAccessMemory())
@@ -1748,7 +1744,7 @@ static void hoist(Instruction &I, const DominatorTree *DT, const Loop *CurLoop,
       // time in isGuaranteedToExecute if we don't actually have anything to
       // drop.  It is a compile time optimization, not required for correctness.
       !SafetyInfo->isGuaranteedToExecute(I, DT, CurLoop))
-    I.dropUndefImplyingAttrsAndUnknownMetadata();
+    I.dropUBImplyingAttrsAndUnknownMetadata();
 
   if (isa<PHINode>(I))
     // Move the new node to the end of the phi list in the destination block.

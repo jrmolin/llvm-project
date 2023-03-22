@@ -368,6 +368,12 @@ public:
   bool isV0Reg() const {
     return Kind == KindTy::Register && Reg.RegNum == RISCV::V0;
   }
+  bool isAnyReg() const {
+    return Kind == KindTy::Register &&
+           (RISCVMCRegisterClasses[RISCV::GPRRegClassID].contains(Reg.RegNum) ||
+            RISCVMCRegisterClasses[RISCV::FPR64RegClassID].contains(Reg.RegNum) ||
+            RISCVMCRegisterClasses[RISCV::VRRegClassID].contains(Reg.RegNum));
+  }
   bool isImm() const override { return Kind == KindTy::Immediate; }
   bool isMem() const override { return false; }
   bool isSystemRegister() const { return Kind == KindTy::SystemRegister; }
@@ -496,7 +502,7 @@ public:
       return isUImm5();
     if (Kind != KindTy::FPImmediate)
       return false;
-    int Idx = RISCVLoadFPImm::getLoadFP64Imm(
+    int Idx = RISCVLoadFPImm::getLoadFPImm(
         APFloat(APFloat::IEEEdouble(), APInt(64, getFPConst())));
     // Don't allow decimal version of the minimum value. It is a different value
     // for each supported data type.
@@ -985,7 +991,7 @@ public:
       return;
     }
 
-    int Imm = RISCVLoadFPImm::getLoadFP64Imm(
+    int Imm = RISCVLoadFPImm::getLoadFPImm(
         APFloat(APFloat::IEEEdouble(), APInt(64, getFPConst())));
     Inst.addOperand(MCOperand::createImm(Imm));
   }
@@ -1459,15 +1465,13 @@ RISCVAsmParser::parseInsnDirectiveOpcode(OperandVector &Operands) {
     auto *CE = dyn_cast<MCConstantExpr>(Res);
     if (CE) {
       int64_t Imm = CE->getValue();
-      if (isUInt<7>(Imm)) {
+      if (isUInt<7>(Imm) && (Imm & 3) == 3) {
         Operands.push_back(RISCVOperand::createImm(Res, S, E, isRV64()));
         return MatchOperand_Success;
       }
     }
 
-    Twine Msg = "immediate must be an integer in the range";
-    Error(S, Msg + " [" + Twine(0) + ", " + Twine((1 << 7) - 1) + "]");
-    return MatchOperand_ParseFail;
+    break;
   }
   case AsmToken::Identifier: {
     StringRef Identifier;
@@ -1476,26 +1480,23 @@ RISCVAsmParser::parseInsnDirectiveOpcode(OperandVector &Operands) {
 
     auto Opcode = RISCVInsnOpcode::lookupRISCVOpcodeByName(Identifier);
     if (Opcode) {
+      assert(isUInt<7>(Opcode->Value) && (Opcode->Value & 0x3) == 3 &&
+             "Unexpected opcode");
       Res = MCConstantExpr::create(Opcode->Value, getContext());
       E = SMLoc::getFromPointer(S.getPointer() + Identifier.size());
       Operands.push_back(RISCVOperand::createImm(Res, S, E, isRV64()));
       return MatchOperand_Success;
     }
 
-    Twine Msg = "operand must be a valid opcode name or an "
-                "integer in the range";
-    Error(S, Msg + " [" + Twine(0) + ", " + Twine((1 << 7) - 1) + "]");
-    return MatchOperand_ParseFail;
+    break;
   }
-  case AsmToken::Percent: {
-    // Discard operand with modifier.
-    Twine Msg = "immediate must be an integer in the range";
-    Error(S, Msg + " [" + Twine(0) + ", " + Twine((1 << 7) - 1) + "]");
-    return MatchOperand_ParseFail;
-  }
+  case AsmToken::Percent:
+    break;
   }
 
-  return MatchOperand_NoMatch;
+  Error(S, "opcode must be in the range [0, 127] and the lower 2 bits must be "
+           "0x3");
+  return MatchOperand_ParseFail;
 }
 
 OperandMatchResultTy

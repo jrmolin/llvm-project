@@ -1,4 +1,3 @@
-// UNSUPPORTED: system-windows
 // RUN: %clang %s -### -no-canonical-prefixes --target=arm-liteos \
 // RUN:     -resource-dir=%S/Inputs/ohos_native_tree/llvm/lib/clang/x.y.z \
 // RUN:     --sysroot=%S/Inputs/ohos_native_tree/sysroot -fuse-ld=lld -march=armv7-a 2>&1 \
@@ -25,8 +24,8 @@
 // CHECK: Scrt1.o
 // CHECK: crti.o
 // CHECK: clang_rt.crtbegin.o
-// CHECK-ARM: "-L[[SYSROOT]]/usr/lib/arm-liteos-ohos/"
-// CHECK-ARM-A7-SOFT: "-L[[SYSROOT]]/usr/lib/arm-liteos-ohos/a7_soft"
+// CHECK-ARM: "-L[[SYSROOT]]{{/|\\\\}}usr{{/|\\\\}}lib{{/|\\\\}}arm-liteos-ohos{{/|\\\\}}"
+// CHECK-ARM-A7-SOFT: "-L[[SYSROOT]]{{/|\\\\}}usr{{/|\\\\}}lib{{/|\\\\}}arm-liteos-ohos{{/|\\\\}}a7_soft"
 // CHECK-ARM: "[[RESOURCE_DIR]]{{/|\\\\}}lib{{/|\\\\}}arm-liteos-ohos{{/|\\\\}}libclang_rt.builtins.a"
 // CHECK-ARM-A7-SOFT: "[[RESOURCE_DIR]]{{/|\\\\}}lib{{/|\\\\}}arm-liteos-ohos/a7_soft{{/|\\\\}}libclang_rt.builtins.a"
 // CHECK: "-lc"
@@ -59,14 +58,13 @@
 // RUN:     | FileCheck %s -check-prefix=CHECK-RUNTIME
 // RUN: %clang %s -### --target=x86_64-linux-ohos -fuse-ld=lld 2>&1 \
 // RUN:     | FileCheck %s -check-prefix=CHECK-RUNTIME
-// CHECK-RUNTIME: "{{.*}}/libclang_rt.builtins.a"
+// CHECK-RUNTIME: "{{.*}}libclang_rt.builtins.a"
 // CHECK-RUNTIME: "-l:libunwind.a"
 // CHECK-LIBM: "-lm"
 
 // RUN: %clang %s -### --target=arm-liteos -r -fuse-ld=lld 2>&1 \
 // RUN:     | FileCheck %s -check-prefix=CHECK-RELOCATABLE
 // CHECK-RELOCATABLE-NOT: "-pie"
-// CHECK-RELOCATABLE-NOT: "--build-id"
 // CHECK-RELOCATABLE: "-r"
 
 // RUN: %clang %s -### --target=arm-liteos -nodefaultlibs -fuse-ld=lld 2>&1 \
@@ -209,18 +207,18 @@
 // CHECK-MULTILIB-SF: "-dynamic-linker" "/lib/ld-musl-arm.so.1"
 // CHECK-MULTILIB-HF: "-dynamic-linker" "/lib/ld-musl-armhf.so.1"
 
-// CHECK-MULTILIB-ARM: "-L[[SYSROOT]]/usr/lib/arm-liteos-ohos/"
+// CHECK-MULTILIB-ARM: "-L[[SYSROOT]]{{/|\\\\}}usr{{/|\\\\}}lib{{/|\\\\}}arm-liteos-ohos{{/|\\\\}}"
 
-// CHECK-MULTILIB-ARM-A7-SOFT: "-L[[SYSROOT]]/usr/lib/arm-liteos-ohos/a7_soft"
+// CHECK-MULTILIB-ARM-A7-SOFT: "-L[[SYSROOT]]{{/|\\\\}}usr{{/|\\\\}}lib{{/|\\\\}}arm-liteos-ohos{{/|\\\\}}a7_soft"
 
-// CHECK-MULTILIB-ARM-A7-SOFTFP: "-L[[SYSROOT]]/usr/lib/arm-liteos-ohos/a7_softfp_neon-vfpv4"
+// CHECK-MULTILIB-ARM-A7-SOFTFP: "-L[[SYSROOT]]{{/|\\\\}}usr{{/|\\\\}}lib{{/|\\\\}}arm-liteos-ohos{{/|\\\\}}a7_softfp_neon-vfpv4"
 
-// CHECK-MULTILIB-ARM-A7-HARD: "-L[[SYSROOT]]/usr/lib/arm-liteos-ohos/a7_hard_neon-vfpv4"
+// CHECK-MULTILIB-ARM-A7-HARD: "-L[[SYSROOT]]{{/|\\\\}}usr{{/|\\\\}}lib{{/|\\\\}}arm-liteos-ohos{{/|\\\\}}a7_hard_neon-vfpv4"
 
-// CHECK-MULTILIB-ARM: "[[RESOURCE_DIR]]/lib/arm-liteos-ohos/libclang_rt.builtins.a"
-// CHECK-MULTILIB-ARM-A7-SOFT: "[[RESOURCE_DIR]]/lib/arm-liteos-ohos/a7_soft/libclang_rt.builtins.a"
-// CHECK-MULTILIB-ARM-A7-SOFTFP: "[[RESOURCE_DIR]]/lib/arm-liteos-ohos/a7_softfp_neon-vfpv4/libclang_rt.builtins.a"
-// CHECK-MULTILIB-ARM-A7-HARD: "[[RESOURCE_DIR]]/lib/arm-liteos-ohos/a7_hard_neon-vfpv4/libclang_rt.builtins.a"
+// CHECK-MULTILIB-ARM: "[[RESOURCE_DIR]]{{/|\\\\}}lib{{/|\\\\}}arm-liteos-ohos{{/|\\\\}}libclang_rt.builtins.a"
+// CHECK-MULTILIB-ARM-A7-SOFT: "[[RESOURCE_DIR]]{{/|\\\\}}lib{{/|\\\\}}arm-liteos-ohos{{/|\\\\}}a7_soft{{/|\\\\}}libclang_rt.builtins.a"
+// CHECK-MULTILIB-ARM-A7-SOFTFP: "[[RESOURCE_DIR]]{{/|\\\\}}lib{{/|\\\\}}arm-liteos-ohos{{/|\\\\}}a7_softfp_neon-vfpv4{{/|\\\\}}libclang_rt.builtins.a"
+// CHECK-MULTILIB-ARM-A7-HARD: "[[RESOURCE_DIR]]{{/|\\\\}}lib{{/|\\\\}}arm-liteos-ohos{{/|\\\\}}a7_hard_neon-vfpv4{{/|\\\\}}libclang_rt.builtins.a"
 
 // RUN: %clang %s -### -no-canonical-prefixes --target=arm-linux-ohos -fprofile-instr-generate -v \
 // RUN:     -resource-dir=%S/Inputs/ohos_native_tree/llvm/lib/clang/x.y.z \

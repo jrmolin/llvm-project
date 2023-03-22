@@ -4715,6 +4715,11 @@ public:
 
   void CheckAlignasUnderalignment(Decl *D);
 
+  bool CheckNoInlineAttr(const Stmt *OrigSt, const Stmt *CurSt,
+                         const AttributeCommonInfo &A);
+  bool CheckAlwaysInlineAttr(const Stmt *OrigSt, const Stmt *CurSt,
+                             const AttributeCommonInfo &A);
+
   /// Adjust the calling convention of a method to be the ABI default if it
   /// wasn't specified explicitly.  This handles method types formed from
   /// function type typedefs and typename template arguments.
@@ -13594,6 +13599,7 @@ private:
 
   // WebAssembly builtin handling.
   bool BuiltinWasmRefNullExtern(CallExpr *TheCall);
+  bool BuiltinWasmRefNullFunc(CallExpr *TheCall);
 
 public:
   enum FormatStringType {

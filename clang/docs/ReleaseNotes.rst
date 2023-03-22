@@ -80,6 +80,11 @@ C++20 Feature Support
 ^^^^^^^^^^^^^^^^^^^^^
 - Support for out-of-line definitions of constrained templates has been improved.
   This partially fixes `#49620 <https://github.com/llvm/llvm-project/issues/49620>`_.
+- Lambda templates with a requires clause directly after the template parameters now parse
+  correctly if the requires clause consists of a variable with a dependent type.
+  (`#61278 <https://github.com/llvm/llvm-project/issues/61278>`_)
+- Announced C++20 Coroutines is fully supported on all targets except Windows, which
+  still has some stability and ABI issues.
 
 C++2b Feature Support
 ^^^^^^^^^^^^^^^^^^^^^
@@ -116,6 +121,9 @@ Non-comprehensive list of changes in this release
   optimizations.
 - Clang now supports ``__builtin_nondeterministic_value`` that returns a
   nondeterministic value of the same type as the provided argument.
+- Clang now supports ``__builtin_FILE_NAME()`` which returns the same
+  information as the ``__FILE_NAME__`` macro (the presumed file name
+  from the invocation point, with no path components included).
 
 New Compiler Flags
 ------------------
@@ -132,6 +140,9 @@ Removed Compiler Flags
   or higher to use standard C++ modules instead.
 - The deprecated flag `-fcoroutines-ts` is removed. Please use ``-std=c++20``
   or higher to use standard C++ coroutines instead.
+- The CodeGen flag `-lower-global-dtors-via-cxa-atexit` which affects how global
+  destructors are lowered for MachO is removed without replacement. The default
+  of `-lower-global-dtors-via-cxa-atexit=true` is now the only supported way.
 
 Attribute Changes in Clang
 --------------------------
@@ -163,13 +174,15 @@ Improvements to Clang's diagnostics
 - Diagnostic notes and fix-its are now generated for ``ifunc``/``alias`` attributes
   which point to functions whose names are mangled.
 - Diagnostics relating to macros on the command line of a preprocessed assembly
-  file are now reported as coming from the file ``<command line>`` instead of
-  ``<built-in>``.
+  file or precompiled header are now reported as coming from the file
+  ``<command line>`` instead of ``<built-in>``.
 - Clang constexpr evaluator now provides a more concise diagnostic when calling
   function pointer that is known to be null.
 - Clang now avoids duplicate warnings on unreachable ``[[fallthrough]];`` statements
   previously issued from ``-Wunreachable-code`` and ``-Wunreachable-code-fallthrough``
   by prioritizing ``-Wunreachable-code-fallthrough``.
+- Clang now correctly diagnoses statement attributes ``[[clang::always_inine]]`` and
+  ``[[clang::noinline]]`` when used on a statement with dependent call expressions.
 
 Bug Fixes in This Version
 -------------------------
@@ -199,6 +212,19 @@ Bug Fixes in This Version
   of `CWG2699 <https://wg21.link/CWG2699>_` being accepted by WG21.
 - Fix crash when parsing fold expression containing a delayed typo correction.
   (`#61326 <https://github.com/llvm/llvm-project/issues/61326>`_)
+- Fix crash when dealing with some member accesses outside of class or member
+  function context.
+  (`#37792 <https://github.com/llvm/llvm-project/issues/37792>`_) and
+  (`#48405 <https://github.com/llvm/llvm-project/issues/48405>`_)
+- Fix crash when using ``[[clang::always_inline]]`` or ``[[clang::noinline]]``
+  statement attributes on a call to a template function in the body of a
+  template function.
+- Fix coroutines issue where ``get_return_object()`` result was always eargerly
+  converted to the return type. Eager initialization (allowing RVO) is now only
+  perfomed when these types match, otherwise deferred initialization is used,
+  enabling short-circuiting coroutines use cases. This fixes
+  (`#56532 <https://github.com/llvm/llvm-project/issues/56532>`_) in
+  antecipation of `CWG2563 <https://cplusplus.github.io/CWG/issues/2563.html>_`.
 
 Bug Fixes to Compiler Builtins
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -218,6 +244,11 @@ Bug Fixes to C++ Support
 - Fix an issue about ``decltype`` in the members of class templates derived from
   templates with related parameters.
   (`#58674 <https://github.com/llvm/llvm-project/issues/58674>`_)
+- Fix incorrect deletion of the default constructor of unions in some
+  cases. (`#48416 <https://github.com/llvm/llvm-project/issues/48416>`_)
+- No longer issue a pre-C++2b compatibility warning in ``-pedantic`` mode
+  regading overloaded `operator[]` with more than one parmeter or for static
+  lambdas. (`#61582 <https://github.com/llvm/llvm-project/issues/61582>`_)
 
 Bug Fixes to AST Handling
 ^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -261,6 +292,9 @@ Windows Support
 LoongArch Support
 ^^^^^^^^^^^^^^^^^
 
+- Patchable function entry (``-fpatchable-function-entry``) is now supported
+  on LoongArch.
+
 RISC-V Support
 ^^^^^^^^^^^^^^
 - Added ``-mrvv-vector-bits=`` option to give an upper and lower bound on vector
@@ -297,6 +331,7 @@ Floating Point Support in Clang
 - Add ``__builtin_elementwise_log2`` builtin for floating point types only.
 - Add ``__builtin_elementwise_exp`` builtin for floating point types only.
 - Add ``__builtin_elementwise_exp2`` builtin for floating point types only.
+- Add ``__builtin_set_flt_rounds`` builtin for X86, x86_64, Arm and AArch64 only.
 
 AST Matchers
 ------------
@@ -322,8 +357,8 @@ libclang
   was marked with the explicit identifier.
 
 - Introduced the new ``CXIndex`` constructor function
-  ``clang_createIndexWithOptions``, which allows overriding precompiled preamble
-  storage path.
+  ``clang_createIndexWithOptions``, which allows storing precompiled preambles
+  in memory or overriding the precompiled preamble storage path.
 
 - Deprecated two functions ``clang_CXIndex_setGlobalOptions`` and
   ``clang_CXIndex_setInvocationEmissionPathOption`` in favor of the new
@@ -333,6 +368,14 @@ libclang
   has an evaluable bit width. Fixes undefined behavior when called on a
   bit-field whose width depends on a template paramter.
 
+- ``clang_parseTranslationUnit`` and ``clang_parseTranslationUnit2`` have been
+  changed to automatically locate the Clang installation directory relative to
+  the location of the libclang binary and use it for system headers installed
+  alongside the Clang installation. It is no longer necessary to manually
+  locate such system headers or use the ``clang_parseTranslationUnit2FullArgv``
+  function for this purpose if libclang has been installed in the default
+  location.
+ 
 Static Analyzer
 ---------------
 - Fix incorrect alignment attribute on the this parameter of certain

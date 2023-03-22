@@ -372,12 +372,18 @@ typedef struct CXIndexOptions {
    * \see clang_createIndex()
    */
   unsigned DisplayDiagnostics : 1;
-  unsigned /*Reserved*/ : 14;
+  /**
+   * Store PCH in memory. If zero, PCH are stored in temporary files.
+   */
+  unsigned StorePreamblesInMemory : 1;
+  unsigned /*Reserved*/ : 13;
 
   /**
    * The path to a directory, in which to store temporary PCH files. If null or
    * empty, the default system temporary directory is used. These PCH files are
    * deleted on clean exit but stay on disk if the program crashes or is killed.
+   *
+   * This option is ignored if \a StorePreamblesInMemory is non-zero.
    *
    * Libclang does not create the directory at the specified path in the file
    * system. Therefore it must exist, or storing PCH files will fail.
@@ -439,7 +445,9 @@ clang_createIndexWithOptions(const CXIndexOptions *options);
 /**
  * Sets general options associated with a CXIndex.
  *
- * This function is DEPRECATED. Set CXIndexOptions::GlobalOptions and call
+ * This function is DEPRECATED. Set
+ * CXIndexOptions::ThreadBackgroundPriorityForIndexing and/or
+ * CXIndexOptions::ThreadBackgroundPriorityForEditing and call
  * clang_createIndexWithOptions() instead.
  *
  * For example:
@@ -891,8 +899,13 @@ CINDEX_LINKAGE enum CXErrorCode clang_parseTranslationUnit2(
 
 /**
  * Same as clang_parseTranslationUnit2 but requires a full command line
- * for \c command_line_args including argv[0]. This is useful if the standard
- * library paths are relative to the binary.
+ * for \c command_line_args including argv[0].
+ *
+ * This is useful if the driver uses paths relative to the binary and either
+ * you are targeting libclang versions older than Clang 17, or libclang is
+ * installed to a non-standard location. Clang 17 and newer will automatically
+ * use the correct argv[0] if libclang is installed in the lib directory
+ * parallel to the bin directory where the clang binary is installed.
  */
 CINDEX_LINKAGE enum CXErrorCode clang_parseTranslationUnit2FullArgv(
     CXIndex CIdx, const char *source_filename,
