@@ -4740,11 +4740,8 @@ bool TokenAnnotator::mustBreakBefore(const AnnotatedLine &Line,
   // If AlwaysBreakBeforeFunctionParameters is true, we want to break before
   // the next parameter, if there is one.
   if (Left.is(tok::l_paren) && Style.AlwaysBreakBeforeFunctionParameters &&
-      !Right.is(tok::r_paren) && Left.Previous) {
-      const FormatToken &TwoPrevious = *Left.Previous;
-      if (TwoPrevious.is(TT_FunctionDeclarationName)) {
+      !Right.is(tok::r_paren) && Left.Previous && Left.Previous->is(TT_FunctionDeclarationName)) {
           return true;
-      }
   }
 
   // If the last token before a '}', ']', or ')' is a comma or a trailing

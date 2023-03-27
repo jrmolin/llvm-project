@@ -820,7 +820,7 @@ struct FormatStyle {
   ///        int argument1,
   ///        int argument2);
   /// \endcode
-  /// \version 16
+  /// \version 16.0
   bool AlwaysBreakBeforeFunctionParameters;
 
   /// If ``true``, always break before multiline string literals.

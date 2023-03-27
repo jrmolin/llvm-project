@@ -1370,7 +1370,7 @@ the configuration (without a prefix: ``Auto``).
 
 .. _AlwaysBreakBeforeFunctionParameters:
 
-**AlwaysBreakBeforeFunctionParameters** (``Boolean``) :versionbadge:`clang-format 16` :ref:`¶ <AlwaysBreakBeforeFunctionParameters>`
+**AlwaysBreakBeforeFunctionParameters** (``Boolean``) :versionbadge:`clang-format 16.0` :ref:`¶ <AlwaysBreakBeforeFunctionParameters>`
   If ``true``, always break before function parameters in a declaration.
 
   This flag is meant to align function parameters starting on the line following
