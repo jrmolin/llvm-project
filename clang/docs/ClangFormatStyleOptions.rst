@@ -3662,7 +3662,7 @@ the configuration (without a prefix: ``Auto``).
 
 .. _Macros:
 
-**Macros** (``List of Strings``) :ref:`¶ <Macros>`
+**Macros** (``List of Strings``) :versionbadge:`clang-format 17.0` :ref:`¶ <Macros>`
   A list of macros of the form ``<definition>=<expansion>`` .
 
   Code will be parsed with macros expanded, in order to determine how to
@@ -3673,29 +3673,35 @@ the configuration (without a prefix: ``Auto``).
   .. code-block:: c++
 
     A(a*b);
+
   will usually be interpreted as a call to a function A, and the
   multiplication expression will be formatted as `a * b`.
 
   If we specify the macro definition:
 
-  .. code-block:: c++
+  .. code-block:: yaml
 
     Macros:
     - A(x)=x
+
   the code will now be parsed as a declaration of the variable b of type a*,
   and formatted as `a* b` (depending on pointer-binding rules).
 
   Features and restrictions:
-  *  Both function-like macros and object-like macros are supported.
-  *  Macro arguments must be used exactly once in the expansion.
-  *  No recursive expansion; macros referencing other macros will be
+   * Both function-like macros and object-like macros are supported.
+   * Macro arguments must be used exactly once in the expansion.
+   * No recursive expansion; macros referencing other macros will be
      ignored.
-  *  Overloading by arity is supported: for example, given the macro
-     definitions A=x, A()=y, A(a)=a,
-     'A;' -> 'x;'
-     'A();' -> 'y;'
-     'A(z);' -> 'z;'
-     'A(a, b) will not be expanded.
+   * Overloading by arity is supported: for example, given the macro
+     definitions A=x, A()=y, A(a)=a
+
+
+  .. code-block:: c++
+
+     A; -> x;
+     A(); -> y;
+     A(z); -> z;
+     A(a, b); // will not be expanded.
 
 .. _MaxEmptyLinesToKeep:
 
