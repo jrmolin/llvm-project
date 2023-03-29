@@ -85,6 +85,13 @@ C++20 Feature Support
   (`#61278 <https://github.com/llvm/llvm-project/issues/61278>`_)
 - Announced C++20 Coroutines is fully supported on all targets except Windows, which
   still has some stability and ABI issues.
+- Downgraded use of a reserved identifier in a module export declaration from
+  an error to a warning under the ``-Wreserved-module-identifier`` warning
+  group. This warning is enabled by default. This addresses `#61446
+  <https://github.com/llvm/llvm-project/issues/61446>`_ and allows easier
+  building of precompiled modules. This diagnostic may be strengthened into an
+  error again in the future once there is a less fragile way to mark a module
+  as being part of the implementation rather than a user module.
 
 C++2b Feature Support
 ^^^^^^^^^^^^^^^^^^^^^
@@ -186,6 +193,9 @@ Improvements to Clang's diagnostics
   by prioritizing ``-Wunreachable-code-fallthrough``.
 - Clang now correctly diagnoses statement attributes ``[[clang::always_inine]]`` and
   ``[[clang::noinline]]`` when used on a statement with dependent call expressions.
+- Clang now checks for completeness of the second and third arguments in the
+  conditional operator.
+  (`#59718 <https://github.com/llvm/llvm-project/issues/59718>`_)
 
 Bug Fixes in This Version
 -------------------------
@@ -235,6 +245,9 @@ Bug Fixes in This Version
   the initializer, so it behaves consistently with other ``VarDecls`` and ends
   on the last token of initializer, instead of right angle bracket of
   the template argument list.
+- Fix false-positive diagnostic issued for consteval initializers of temporary
+  objects.
+  (`#60286 <https://github.com/llvm/llvm-project/issues/60286>`_)
 
 Bug Fixes to Compiler Builtins
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -325,6 +338,11 @@ CUDA Support
 
 AIX Support
 ^^^^^^^^^^^
+- Add an AIX-only link-time option, `-mxcoff-build-id=0xHEXSTRING`, to allow users
+  to embed a hex id in their binary such that it's readable by the program itself.
+  This option is an alternative to the `--build-id=0xHEXSTRING` GNU linker option
+  which is currently not supported by the AIX linker.
+
 
 WebAssembly Support
 ^^^^^^^^^^^^^^^^^^^
@@ -363,6 +381,8 @@ clang-format
   Compared to ``NextLine`` style, ``NextLineOnly`` style will not try to
   put the initializers on the current line first, instead, it will try to
   put the initializers on the next line only.
+- Add additional Qualifier Ordering support for special cases such
+  as templates, requires clauses, long qualified names.
 
 libclang
 --------

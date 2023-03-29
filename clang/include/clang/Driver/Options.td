@@ -185,7 +185,7 @@ def m_wasm_Features_Driver_Group : OptionGroup<"<wasm driver features group>">,
 def m_x86_Features_Group : OptionGroup<"<x86 features group>">,
                            Group<m_Group>, Flags<[CoreOption]>, DocName<"X86">;
 def m_riscv_Features_Group : OptionGroup<"<riscv features group>">,
-                             Group<m_Group>, DocName<"RISCV">;
+                             Group<m_Group>, DocName<"RISC-V">;
 
 def m_libc_Group : OptionGroup<"<m libc group>">, Group<m_mips_Features_Group>,
                    Flags<[HelpHidden]>;
@@ -3905,6 +3905,8 @@ defm zvector : BoolFOption<"zvector",
 def mzvector : Flag<["-"], "mzvector">, Alias<fzvector>;
 def mno_zvector : Flag<["-"], "mno-zvector">, Alias<fno_zvector>;
 
+def mxcoff_build_id_EQ : Joined<["-"], "mxcoff-build-id=">, Group<Link_Group>, MetaVarName<"<0xHEXSTRING>">,
+  HelpText<"On AIX, request creation of a build-id string, \"0xHEXSTRING\", in the string table of the loader section inside the linked binary">;
 def mignore_xcoff_visibility : Flag<["-"], "mignore-xcoff-visibility">, Group<m_Group>,
 HelpText<"Not emit the visibility attribute for asm in AIX OS or give all symbols 'unspecified' visibility in XCOFF object file">,
   Flags<[CC1Option]>;
@@ -5794,11 +5796,11 @@ def fctor_dtor_return_this : Flag<["-"], "fctor-dtor-return-this">,
            "and non-deleting destructors. (No effect on Microsoft ABI)">,
   MarshallingInfoFlag<CodeGenOpts<"CtorDtorReturnThis">>;
 
-defm experimental_assignment_tracking :
-  BoolOption<"f", "experimental-assignment-tracking",
-  CodeGenOpts<"EnableAssignmentTracking">, DefaultFalse,
-  PosFlag<SetTrue, [CC1Option]>, NegFlag<SetFalse>, BothFlags<[CoreOption]>>,
-  Group<f_Group>;
+def experimental_assignment_tracking_EQ : Joined<["-"], "fexperimental-assignment-tracking=">,
+  Group<f_Group>, CodeGenOpts<"EnableAssignmentTracking">,
+  NormalizedValuesScope<"CodeGenOptions::AssignmentTrackingOpts">,
+  Values<"disabled,enabled,forced">, NormalizedValues<["Disabled","Enabled","Forced"]>,
+  MarshallingInfoEnum<CodeGenOpts<"AssignmentTrackingMode">, "Disabled">;
 
 } // let Flags = [CC1Option, NoDriverOption]
 

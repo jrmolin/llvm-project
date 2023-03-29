@@ -1,4 +1,4 @@
-//===-- RISCVISAInfo.cpp - RISCV Arch String Parser -------------*- C++ -*-===//
+//===-- RISCVISAInfo.cpp - RISC-V Arch String Parser ------------*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -135,6 +135,7 @@ static const RISCVSupportedExtension SupportedExperimentalExtensions[] = {
     {"zcd", RISCVExtensionVersion{1, 0}},
     {"zcf", RISCVExtensionVersion{1, 0}},
     {"zfa", RISCVExtensionVersion{0, 1}},
+    {"zicond", RISCVExtensionVersion{1, 0}},
     {"zvfh", RISCVExtensionVersion{0, 1}},
     {"ztso", RISCVExtensionVersion{0, 1}},
 
