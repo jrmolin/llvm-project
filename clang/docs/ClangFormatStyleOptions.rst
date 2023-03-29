@@ -1373,18 +1373,19 @@ the configuration (without a prefix: ``Auto``).
 **AlwaysBreakBeforeFunctionParameters** (``Boolean``) :versionbadge:`clang-format 16.0` :ref:`¶ <AlwaysBreakBeforeFunctionParameters>`
   If ``true``, always break before function parameters in a declaration.
 
-  This flag is meant to align function parameters starting on the line following
-  a function declaration or definition. Thus, it will only take effect if a
-  function declares a parameter (or multiple parameters). Example uses
+  This flag is meant to align function parameters starting on the line
+  following a function declaration or definition. Thus, it will only take
+  effect if a function declares a parameter (or multiple parameters).
+  Example uses
   ``AlwaysBreakAfterReturnType`` set to ``All``.
 
   .. code-block:: c++
 
-     true:                                  false:
-     int                            vs.     int
-     someFunction(                          someFunction(int argument1, int argument2);
-         int argument1,
-         int argument2);
+     true:                              false:
+     int                        vs.     int
+     someFunction(                      someFunction(int arg1, int arg2);
+         int arg1,
+         int arg2);
 
 .. _AlwaysBreakBeforeMultilineStrings:
 
