@@ -357,8 +357,9 @@ bool ContinuationIndenter::mustBreak(const LineState &State) {
   // Check if we want to break before function parameters in declarations
   if (startsNextParameter(Current, Style) &&
       Style.AlwaysBreakBeforeFunctionParameters &&
-      State.Line->MustBeDeclaration)
+      State.Line->MustBeDeclaration) {
     return true;
+  }
   if (Current.MustBreakBefore ||
       (Current.is(TT_InlineASMColon) &&
        (Style.BreakBeforeInlineASMColon == FormatStyle::BBIAS_Always ||
