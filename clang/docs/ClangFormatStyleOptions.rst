@@ -1377,8 +1377,6 @@ the configuration (without a prefix: ``Auto``).
   This flag is meant to align function parameters starting on the line
   following a function declaration or definition. Thus, it will only take
   effect if a function declares a parameter (or multiple parameters).
-  Example uses
-  ``AlwaysBreakAfterReturnType`` set to ``All``.
 
   .. code-block:: c++
 
