@@ -815,9 +815,8 @@ struct FormatStyle {
   /// Example uses
   /// ``AlwaysBreakAfterReturnType`` set to ``All``.
   /// \code
-  ///    true:                              false:
-  ///    int                        vs.     int
-  ///    someFunction(                      someFunction(int arg1, int arg2);
+  ///    true:                           false:
+  ///    int someFunction(       vs.     int someFunction(int arg1, int arg2);
   ///        int arg1,
   ///        int arg2);
   /// \endcode

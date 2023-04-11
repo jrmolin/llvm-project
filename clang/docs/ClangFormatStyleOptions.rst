@@ -1382,8 +1382,7 @@ the configuration (without a prefix: ``Auto``).
   .. code-block:: c++
 
      true:                              false:
-     int                        vs.     int
-     someFunction(                      someFunction(int arg1, int arg2);
+     int someFunction(          vs.     int someFunction(int arg1, int arg2);
          int arg1,
          int arg2);
 

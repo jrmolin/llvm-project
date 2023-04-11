@@ -25433,22 +25433,45 @@ TEST_F(FormatTest, BreakBeforeParameterList) {
   FormatStyle Style = getLLVMStyle();
   EXPECT_EQ(Style.AlwaysBreakBeforeFunctionParameters, false);
 
-  const StringRef Code("int function1(int param1, int param2, int param3);\n"
-                       "int function2();\n");
-
   // verify that there is no break by default
   verifyFormat("int function1(int param1, int param2, int param3);\n"
                "int function2();\n",
-               Code, Style);
+               "int function1(int param1, int param2, int param3);\n"
+               "int function2();\n",
+               Style);
+
+  verifyFormat("void function1(int param1, int param2, int param3) {}\n",
+               "void function1(int param1, int param2, int param3) {}\n",
+               Style);
 
   // verify that there is a break when told to break
   Style.AlwaysBreakBeforeFunctionParameters = true;
-  verifyFormat("int function1(\n"
+  verifyFormat("int function1(\n" // the formatted part
                "    int param1,\n"
                "    int param2,\n"
                "    int param3);\n"
                "int function2();\n",
-               Code, Style);
+               // the original
+               "int function1(int param1, int param2, int param3);\n"
+               "int function2();\n",
+               Style);
+
+  verifyFormat("void function1(\n" // the formatted part
+               "    int param1,\n"
+               "    int param2,\n"
+               "    int param3) {}\n",
+               // the original
+               "void function1(int param1, int param2, int param3) {}\n",
+               Style);
+
+  // verify that having no parameters doesn't affect the parentheses
+  verifyFormat("void function1() {}\n", // the formatted part
+               "void function1() {}\n", // the original
+               Style);
+
+  verifyFormat("void function1();\n", // the formatted part
+               "void function1();\n", // the original
+               Style);
 }
 } // namespace
 } // namespace test
