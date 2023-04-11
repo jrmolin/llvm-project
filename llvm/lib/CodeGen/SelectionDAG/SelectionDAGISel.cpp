@@ -1449,7 +1449,7 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
                                  Fn.getSubprogram(),
                                  &Fn.getEntryBlock());
       R << "FastISel didn't lower all arguments: "
-        << ore::NV("Prototype", Fn.getType());
+        << ore::NV("Prototype", Fn.getFunctionType());
       reportFastISelFailure(*MF, *ORE, R, EnableFastISelAbort > 1);
 
       // Use SelectionDAG argument lowering
@@ -2318,7 +2318,7 @@ void SelectionDAGISel::Select_STACKMAP(SDNode *N) {
 
   // Stash the chain and glue operands so we can move them to the end.
   SDValue Chain = *It++;
-  SDValue InFlag = *It++;
+  SDValue InGlue = *It++;
 
   // <id> operand.
   SDValue ID = *It++;
@@ -2335,7 +2335,7 @@ void SelectionDAGISel::Select_STACKMAP(SDNode *N) {
     pushStackMapLiveVariable(Ops, *It, DL);
 
   Ops.push_back(Chain);
-  Ops.push_back(InFlag);
+  Ops.push_back(InGlue);
 
   SDVTList NodeTys = CurDAG->getVTList(MVT::Other, MVT::Glue);
   CurDAG->SelectNodeTo(N, TargetOpcode::STACKMAP, NodeTys, Ops);
