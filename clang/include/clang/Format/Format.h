@@ -807,7 +807,8 @@ struct FormatStyle {
   /// \version 3.8
   ReturnTypeBreakingStyle AlwaysBreakAfterReturnType;
 
-  /// If ``true``, always break before function parameters in a declaration.
+  /// If ``true``, always break before function parameters in a declaration and
+  /// a definition.
   ///
   /// This flag is meant to align function parameters starting on the line
   /// following a function declaration or definition. Thus, it will only take
