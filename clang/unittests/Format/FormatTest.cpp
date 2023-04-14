@@ -25431,32 +25431,25 @@ TEST_F(FormatTest, SpaceAfterUDL) {
 
 TEST_F(FormatTest, BreakBeforeParameterList) {
   FormatStyle Style = getLLVMStyle();
-  EXPECT_EQ(Style.AlwaysBreakBeforeFunctionParameters, FormatStyle::FPBS_Leave);
+  EXPECT_EQ(Style.BreakBeforeFunctionParameters, FormatStyle::FPBS_Leave);
+  Style.BinPackParameters = false;
 
-  // test Leave
+  // test Leave (basically transparent mode)
 
   // verify that there is no break by default
   verifyFormat("int function1();\n" // formatted
                "int function2(int param1, int param2, int param3);\n"
                "void function3(int param1, int param2, int param3) {}\n"
-               "int function4(\n"
-               "    int param1,\n"
-               "    int param2,\n"
-               "    int param3);\n"
-               "int function5(int param1, int param2, int param3);\n",
+               "int function4(int param1, int param2, int param3);\n",
                "int function1();\n" // original
                "int function2(int param1, int param2, int param3);\n"
                "void function3(int param1, int param2, int param3) {}\n"
-               "int function4(\n"
-               "    int param1,\n"
-               "    int param2,\n"
-               "    int param3);\n"
-               "int function5(int param1, int param2, int param3);\n",
+               "int function4(int param1, int param2, int param3);\n",
                Style);
 
   // test Always
   // verify that there is a break when told to break
-  Style.AlwaysBreakBeforeFunctionParameters = FormatStyle::FPBS_Always;
+  Style.BreakBeforeFunctionParameters = FormatStyle::FPBS_Always;
   verifyFormat("int function1(\n"
                "    int param1,\n"
                "    int param2,\n"
@@ -25486,7 +25479,7 @@ TEST_F(FormatTest, BreakBeforeParameterList) {
                Style);
 
   // test Never
-  Style.AlwaysBreakBeforeFunctionParameters = FormatStyle::FPBS_Never;
+  Style.BreakBeforeFunctionParameters = FormatStyle::FPBS_Never;
   verifyFormat("int function1();\n" // the formatted part
                "int function2(int param1, int param2, int param3);\n",
                "int function1();\n" // the original

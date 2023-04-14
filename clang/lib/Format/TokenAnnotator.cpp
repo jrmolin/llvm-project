@@ -4840,18 +4840,17 @@ bool TokenAnnotator::mustBreakBefore(const AnnotatedLine &Line,
     return true;
   }
 
-  // If AlwaysBreakBeforeFunctionParameters is true, we want to break before
-  // the next parameter, if there is one.
+  // If BreakBeforeFunctionParameters is Always, we want to break before
+  // the next parameter, if there is one. If it is Leave and a newline exists,
+  // make sure we insert one. Otherwise, no newline.
   if (Left.is(tok::l_paren) && !Right.is(tok::r_paren) && Left.Previous &&
       Left.Previous->is(TT_FunctionDeclarationName)) {
-    switch (Style.AlwaysBreakBeforeFunctionParameters) {
+    switch (Style.BreakBeforeFunctionParameters) {
     case FormatStyle::FPBS_Always:
       return true;
     case FormatStyle::FPBS_Never:
       return false;
     case FormatStyle::FPBS_Leave:
-      if (Right.NewlinesBefore > 0)
-        return true;
       break;
     }
   }

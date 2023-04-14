@@ -809,23 +809,20 @@ struct FormatStyle {
 
   /// Different ways to break before the function parameters.
   enum FunctionParameterBreakingStyle : int8_t {
-    /// Do nothing with line breaks before function parameters.
+    /// Be transparent with line breaks before function parameters. This allows
+    /// the
+    /// penalty calculations to drive line breaks.
     /// \code
     ///    original:
-    ///    int someFunction(
-    ///        int arg1,
-    ///        int arg2);
     ///    int someFunction(int arg1, int arg2);
     ///
     ///    formatted:
-    ///    int someFunction(
-    ///        int arg1,
-    ///        int arg2);
     ///    int someFunction(int arg1, int arg2);
     /// \endcode
     FPBS_Leave,
 
-    /// Never break after the return type. This removes breaks that are there.
+    /// Never break before the first parameter. This removes breaks that are
+    /// there.
     /// \code
     ///    original:
     ///    int someFunction(
@@ -837,7 +834,7 @@ struct FormatStyle {
     /// \endcode
     FPBS_Never,
 
-    /// Always break after the return type.
+    /// Always break before the first parameter.
     /// \code
     ///    original:
     ///    int someFunction(int arg1, int arg2);
@@ -852,7 +849,7 @@ struct FormatStyle {
 
   /// The function parameter breaking style to use.
   /// \version 16.0
-  FunctionParameterBreakingStyle AlwaysBreakBeforeFunctionParameters;
+  FunctionParameterBreakingStyle BreakBeforeFunctionParameters;
 
   /// If ``true``, always break before multiline string literals.
   ///

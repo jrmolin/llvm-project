@@ -1368,58 +1368,6 @@ the configuration (without a prefix: ``Auto``).
 
 
 
-.. _AlwaysBreakBeforeFunctionParameters:
-
-**AlwaysBreakBeforeFunctionParameters** (``FunctionParameterBreakingStyle``) :versionbadge:`clang-format 16.0` :ref:`¶ <AlwaysBreakBeforeFunctionParameters>`
-  The function parameter breaking style to use.
-
-  Possible values:
-
-  * ``FPBS_Leave`` (in configuration: ``Leave``)
-    Do nothing with line breaks before function parameters.
-
-    .. code-block:: c++
-
-       original:
-       int someFunction(
-           int arg1,
-           int arg2);
-       int someFunction(int arg1, int arg2);
-
-       formatted:
-       int someFunction(
-           int arg1,
-           int arg2);
-       int someFunction(int arg1, int arg2);
-
-  * ``FPBS_Never`` (in configuration: ``Never``)
-    Never break after the return type. This removes breaks that are there.
-
-    .. code-block:: c++
-
-       original:
-       int someFunction(
-           int arg1,
-           int arg2);
-
-       formatted:
-       int someFunction(int arg1, int arg2);
-
-  * ``FPBS_Always`` (in configuration: ``Always``)
-    Always break after the return type.
-
-    .. code-block:: c++
-
-       original:
-       int someFunction(int arg1, int arg2);
-
-       formatted:
-       int someFunction(
-           int arg1,
-           int arg2);
-
-
-
 .. _AlwaysBreakBeforeMultilineStrings:
 
 **AlwaysBreakBeforeMultilineStrings** (``Boolean``) :versionbadge:`clang-format 3.4` :ref:`¶ <AlwaysBreakBeforeMultilineStrings>`
@@ -2480,6 +2428,53 @@ the configuration (without a prefix: ``Auto``).
 
       template <typename T>
       concept C = ...;
+
+
+
+.. _BreakBeforeFunctionParameters:
+
+**BreakBeforeFunctionParameters** (``FunctionParameterBreakingStyle``) :versionbadge:`clang-format 16.0` :ref:`¶ <BreakBeforeFunctionParameters>`
+  The function parameter breaking style to use.
+
+  Possible values:
+
+  * ``FPBS_Leave`` (in configuration: ``Leave``)
+    Be transparent with line breaks before function parameters. This allows the
+    penalty calculations to drive line breaks.
+
+    .. code-block:: c++
+
+       original:
+       int someFunction(int arg1, int arg2);
+
+       formatted:
+       int someFunction(int arg1, int arg2);
+
+  * ``FPBS_Never`` (in configuration: ``Never``)
+    Never break before the first parameter. This removes breaks that are there.
+
+    .. code-block:: c++
+
+       original:
+       int someFunction(
+           int arg1,
+           int arg2);
+
+       formatted:
+       int someFunction(int arg1, int arg2);
+
+  * ``FPBS_Always`` (in configuration: ``Always``)
+    Always break before the first parameter.
+
+    .. code-block:: c++
+
+       original:
+       int someFunction(int arg1, int arg2);
+
+       formatted:
+       int someFunction(
+           int arg1,
+           int arg2);
 
 
 

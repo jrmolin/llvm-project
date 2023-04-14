@@ -550,14 +550,6 @@ TEST(ConfigParseTest, ParsesConfiguration) {
   CHECK_PARSE("AllowShortLambdasOnASingleLine: true",
               AllowShortLambdasOnASingleLine, FormatStyle::SLS_All);
 
-  Style.AlwaysBreakBeforeFunctionParameters = FormatStyle::FPBS_Never;
-  CHECK_PARSE("AlwaysBreakBeforeFunctionParameters: Leave",
-              AlwaysBreakBeforeFunctionParameters, FormatStyle::FPBS_Leave);
-  CHECK_PARSE("AlwaysBreakBeforeFunctionParameters: Always",
-              AlwaysBreakBeforeFunctionParameters, FormatStyle::FPBS_Always);
-  CHECK_PARSE("AlwaysBreakBeforeFunctionParameters: Never",
-              AlwaysBreakBeforeFunctionParameters, FormatStyle::FPBS_Never);
-
   Style.SpaceAroundPointerQualifiers = FormatStyle::SAPQ_Both;
   CHECK_PARSE("SpaceAroundPointerQualifiers: Default",
               SpaceAroundPointerQualifiers, FormatStyle::SAPQ_Default);
@@ -614,6 +606,14 @@ TEST(ConfigParseTest, ParsesConfiguration) {
               FormatStyle::BS_WebKit);
   CHECK_PARSE("BreakBeforeBraces: Custom", BreakBeforeBraces,
               FormatStyle::BS_Custom);
+
+  Style.BreakBeforeFunctionParameters = FormatStyle::FPBS_Never;
+  CHECK_PARSE("BreakBeforeFunctionParameters: Leave",
+              BreakBeforeFunctionParameters, FormatStyle::FPBS_Leave);
+  CHECK_PARSE("BreakBeforeFunctionParameters: Always",
+              BreakBeforeFunctionParameters, FormatStyle::FPBS_Always);
+  CHECK_PARSE("BreakBeforeFunctionParameters: Never",
+              BreakBeforeFunctionParameters, FormatStyle::FPBS_Never);
 
   Style.BraceWrapping.AfterControlStatement = FormatStyle::BWACS_Never;
   CHECK_PARSE("BraceWrapping:\n"

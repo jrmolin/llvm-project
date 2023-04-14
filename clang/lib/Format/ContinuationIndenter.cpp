@@ -354,19 +354,7 @@ bool ContinuationIndenter::mustBreak(const LineState &State) {
     auto LambdaBodyLength = getLengthToMatchingParen(Current, State.Stack);
     return LambdaBodyLength > getColumnLimit(State);
   }
-  // Check if we want to break before function parameters in declarations
-  if (startsNextParameter(Current, Style) && State.Line->MustBeDeclaration) {
-    switch (Style.AlwaysBreakBeforeFunctionParameters) {
-    case FormatStyle::FPBS_Always:
-      return true;
-    case FormatStyle::FPBS_Never:
-      return false;
-    case FormatStyle::FPBS_Leave:
-      if (Current.NewlinesBefore > 0)
-        return true;
-      break;
-    }
-  }
+
   if (Current.MustBreakBefore ||
       (Current.is(TT_InlineASMColon) &&
        (Style.BreakBeforeInlineASMColon == FormatStyle::BBIAS_Always ||
@@ -590,6 +578,20 @@ bool ContinuationIndenter::mustBreak(const LineState &State) {
        (Current.is(tok::kw_operator) && !Previous.is(tok::coloncolon))) &&
       !Previous.is(tok::kw_template) && CurrentState.BreakBeforeParameter) {
     return true;
+  }
+
+  // Check if we want to break before the first function parameter in
+  // declarations and definitions
+  if (startsNextParameter(Current, Style) && State.Line->MustBeDeclaration &&
+      Current.Previous->is(tok::l_paren)) {
+    switch (Style.BreakBeforeFunctionParameters) {
+    case FormatStyle::FPBS_Always:
+      return true;
+    case FormatStyle::FPBS_Never:
+      return false;
+    case FormatStyle::FPBS_Leave:
+      break;
+    }
   }
 
   // The following could be precomputed as they do not depend on the state.
@@ -1069,14 +1071,16 @@ unsigned ContinuationIndenter::addTokenOnNewLine(LineState &State,
     // to start a member initializater list in a constructor, this should not
     // be considered bin packing unless the relevant AllowAll option is false or
     // this is a dict/object literal. Break if
-    // AlwaysBreakBeforeFunctionParameters is Always and it's a function
-    // declaration.
+    // BreakBeforeFunctionParameters is Always and it's a function
+    // declaration or if it's Leave and a newline exists already.
     bool PreviousIsBreakingCtorInitializerColon =
         PreviousNonComment && PreviousNonComment->is(TT_CtorInitializerColon) &&
         Style.BreakConstructorInitializers == FormatStyle::BCIS_AfterColon;
     bool AllowAllConstructorInitializersOnNextLine =
         Style.PackConstructorInitializers == FormatStyle::PCIS_NextLine ||
         Style.PackConstructorInitializers == FormatStyle::PCIS_NextLineOnly;
+    bool BreakBeforeFunctionParameter =
+        Style.BreakBeforeFunctionParameters == FormatStyle::FPBS_Always;
     if (!(Previous.isOneOf(tok::l_paren, tok::l_brace, TT_BinaryOperator) ||
           PreviousIsBreakingCtorInitializerColon) ||
         (!Style.AllowAllParametersOfDeclarationOnNextLine &&
@@ -1086,12 +1090,7 @@ unsigned ContinuationIndenter::addTokenOnNewLine(LineState &State,
         (!AllowAllConstructorInitializersOnNextLine &&
          PreviousIsBreakingCtorInitializerColon) ||
         Previous.is(TT_DictLiteral) ||
-        (((Style.AlwaysBreakBeforeFunctionParameters ==
-           FormatStyle::FPBS_Always) ||
-          ((Style.AlwaysBreakBeforeFunctionParameters ==
-            FormatStyle::FPBS_Leave) &&
-           Current.NewlinesBefore > 0)) &&
-         State.Line->MustBeDeclaration)) {
+        (BreakBeforeFunctionParameter && State.Line->MustBeDeclaration)) {
       CurrentState.BreakBeforeParameter = true;
     }
 
