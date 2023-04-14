@@ -335,6 +335,20 @@ struct ScalarEnumerationTraits<
 };
 
 template <>
+struct ScalarEnumerationTraits<FormatStyle::FunctionParameterBreakingStyle> {
+  static void enumeration(IO &IO,
+                          FormatStyle::FunctionParameterBreakingStyle &Value) {
+    IO.enumCase(Value, "Leave", FormatStyle::FPBS_Leave);
+    IO.enumCase(Value, "Never", FormatStyle::FPBS_Never);
+    IO.enumCase(Value, "Always", FormatStyle::FPBS_Always);
+
+    // For backward compatibility.
+    IO.enumCase(Value, "false", FormatStyle::FPBS_Leave);
+    IO.enumCase(Value, "true", FormatStyle::FPBS_Always);
+  }
+};
+
+template <>
 struct ScalarEnumerationTraits<FormatStyle::IndentExternBlockStyle> {
   static void enumeration(IO &IO, FormatStyle::IndentExternBlockStyle &Value) {
     IO.enumCase(Value, "AfterExternBlock", FormatStyle::IEBS_AfterExternBlock);
@@ -871,10 +885,10 @@ template <> struct MappingTraits<FormatStyle> {
                    Style.AlwaysBreakAfterDefinitionReturnType);
     IO.mapOptional("AlwaysBreakAfterReturnType",
                    Style.AlwaysBreakAfterReturnType);
-    IO.mapOptional("AlwaysBreakBeforeMultilineStrings",
-                   Style.AlwaysBreakBeforeMultilineStrings);
     IO.mapOptional("AlwaysBreakBeforeFunctionParameters",
                    Style.AlwaysBreakBeforeFunctionParameters);
+    IO.mapOptional("AlwaysBreakBeforeMultilineStrings",
+                   Style.AlwaysBreakBeforeMultilineStrings);
     IO.mapOptional("AlwaysBreakTemplateDeclarations",
                    Style.AlwaysBreakTemplateDeclarations);
     IO.mapOptional("AttributeMacros", Style.AttributeMacros);
@@ -1333,7 +1347,7 @@ FormatStyle getLLVMStyle(FormatStyle::LanguageKind Language) {
   LLVMStyle.AllowShortLoopsOnASingleLine = false;
   LLVMStyle.AlwaysBreakAfterReturnType = FormatStyle::RTBS_None;
   LLVMStyle.AlwaysBreakAfterDefinitionReturnType = FormatStyle::DRTBS_None;
-  LLVMStyle.AlwaysBreakBeforeFunctionParameters = false;
+  LLVMStyle.AlwaysBreakBeforeFunctionParameters = FormatStyle::FPBS_Leave;
   LLVMStyle.AlwaysBreakBeforeMultilineStrings = false;
   LLVMStyle.AlwaysBreakTemplateDeclarations = FormatStyle::BTDS_MultiLine;
   LLVMStyle.AttributeMacros.push_back("__capability");

@@ -807,20 +807,52 @@ struct FormatStyle {
   /// \version 3.8
   ReturnTypeBreakingStyle AlwaysBreakAfterReturnType;
 
-  /// If ``true``, always break before function parameters in a declaration and
-  /// a definition.
-  ///
-  /// This flag is meant to align function parameters starting on the line
-  /// following a function declaration or definition. Thus, it will only take
-  /// effect if a function declares a parameter (or multiple parameters).
-  /// \code
-  ///    true:                           false:
-  ///    int someFunction(       vs.     int someFunction(int arg1, int arg2);
-  ///        int arg1,
-  ///        int arg2);
-  /// \endcode
+  /// Different ways to break before the function parameters.
+  enum FunctionParameterBreakingStyle : int8_t {
+    /// Do nothing with line breaks before function parameters.
+    /// \code
+    ///    original:
+    ///    int someFunction(
+    ///        int arg1,
+    ///        int arg2);
+    ///    int someFunction(int arg1, int arg2);
+    ///
+    ///    formatted:
+    ///    int someFunction(
+    ///        int arg1,
+    ///        int arg2);
+    ///    int someFunction(int arg1, int arg2);
+    /// \endcode
+    FPBS_Leave,
+
+    /// Never break after the return type. This removes breaks that are there.
+    /// \code
+    ///    original:
+    ///    int someFunction(
+    ///        int arg1,
+    ///        int arg2);
+    ///
+    ///    formatted:
+    ///    int someFunction(int arg1, int arg2);
+    /// \endcode
+    FPBS_Never,
+
+    /// Always break after the return type.
+    /// \code
+    ///    original:
+    ///    int someFunction(int arg1, int arg2);
+    ///
+    ///    formatted:
+    ///    int someFunction(
+    ///        int arg1,
+    ///        int arg2);
+    /// \endcode
+    FPBS_Always,
+  };
+
+  /// The function parameter breaking style to use.
   /// \version 16.0
-  bool AlwaysBreakBeforeFunctionParameters;
+  FunctionParameterBreakingStyle AlwaysBreakBeforeFunctionParameters;
 
   /// If ``true``, always break before multiline string literals.
   ///

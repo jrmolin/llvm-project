@@ -149,7 +149,6 @@ TEST(ConfigParseTest, ParsesConfigurationBools) {
   CHECK_PARSE_BOOL(AllowShortCaseLabelsOnASingleLine);
   CHECK_PARSE_BOOL(AllowShortEnumsOnASingleLine);
   CHECK_PARSE_BOOL(AllowShortLoopsOnASingleLine);
-  CHECK_PARSE_BOOL(AlwaysBreakBeforeFunctionParameters);
   CHECK_PARSE_BOOL(BinPackArguments);
   CHECK_PARSE_BOOL(BinPackParameters);
   CHECK_PARSE_BOOL(BreakAfterJavaFieldAnnotations);
@@ -550,6 +549,14 @@ TEST(ConfigParseTest, ParsesConfiguration) {
               AllowShortLambdasOnASingleLine, FormatStyle::SLS_None);
   CHECK_PARSE("AllowShortLambdasOnASingleLine: true",
               AllowShortLambdasOnASingleLine, FormatStyle::SLS_All);
+
+  Style.AlwaysBreakBeforeFunctionParameters = FormatStyle::FPBS_Never;
+  CHECK_PARSE("AlwaysBreakBeforeFunctionParameters: Leave",
+              AlwaysBreakBeforeFunctionParameters, FormatStyle::FPBS_Leave);
+  CHECK_PARSE("AlwaysBreakBeforeFunctionParameters: Always",
+              AlwaysBreakBeforeFunctionParameters, FormatStyle::FPBS_Always);
+  CHECK_PARSE("AlwaysBreakBeforeFunctionParameters: Never",
+              AlwaysBreakBeforeFunctionParameters, FormatStyle::FPBS_Never);
 
   Style.SpaceAroundPointerQualifiers = FormatStyle::SAPQ_Both;
   CHECK_PARSE("SpaceAroundPointerQualifiers: Default",

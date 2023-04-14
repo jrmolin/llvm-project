@@ -25431,37 +25431,49 @@ TEST_F(FormatTest, SpaceAfterUDL) {
 
 TEST_F(FormatTest, BreakBeforeParameterList) {
   FormatStyle Style = getLLVMStyle();
-  EXPECT_EQ(Style.AlwaysBreakBeforeFunctionParameters, false);
+  EXPECT_EQ(Style.AlwaysBreakBeforeFunctionParameters, FormatStyle::FPBS_Leave);
+
+  // test Leave
 
   // verify that there is no break by default
-  verifyFormat("int function1(int param1, int param2, int param3);\n"
-               "int function2();\n",
-               "int function1(int param1, int param2, int param3);\n"
-               "int function2();\n",
-               Style);
-
-  verifyFormat("void function1(int param1, int param2, int param3) {}\n",
-               "void function1(int param1, int param2, int param3) {}\n",
-               Style);
-
-  // verify that there is a break when told to break
-  Style.AlwaysBreakBeforeFunctionParameters = true;
-  verifyFormat("int function1(\n" // the formatted part
+  verifyFormat("int function1();\n" // formatted
+               "int function2(int param1, int param2, int param3);\n"
+               "void function3(int param1, int param2, int param3) {}\n"
+               "int function4(\n"
                "    int param1,\n"
                "    int param2,\n"
                "    int param3);\n"
-               "int function2();\n",
-               // the original
-               "int function1(int param1, int param2, int param3);\n"
-               "int function2();\n",
-               Style);
-
-  verifyFormat("void function1(\n" // the formatted part
+               "int function5(int param1, int param2, int param3);\n",
+               "int function1();\n" // original
+               "int function2(int param1, int param2, int param3);\n"
+               "void function3(int param1, int param2, int param3) {}\n"
+               "int function4(\n"
                "    int param1,\n"
                "    int param2,\n"
-               "    int param3) {}\n",
-               // the original
-               "void function1(int param1, int param2, int param3) {}\n",
+               "    int param3);\n"
+               "int function5(int param1, int param2, int param3);\n",
+               Style);
+
+  // test Always
+  // verify that there is a break when told to break
+  Style.AlwaysBreakBeforeFunctionParameters = FormatStyle::FPBS_Always;
+  verifyFormat("int function1(\n"
+               "    int param1,\n"
+               "    int param2,\n"
+               "    int param3);\n"
+               "int function2();\n"
+               "void function3(\n"
+               "    int param1,\n"
+               "    int param2,\n"
+               "    int param3) {}\n"
+               "int function4(\n"
+               "    int param1,\n"
+               "    int param2,\n"
+               "    int param3);\n"
+               "int function5(\n"
+               "    int param1,\n"
+               "    int param2,\n"
+               "    int param3);\n",
                Style);
 
   // verify that having no parameters doesn't affect the parentheses
@@ -25471,6 +25483,17 @@ TEST_F(FormatTest, BreakBeforeParameterList) {
 
   verifyFormat("void function1();\n", // the formatted part
                "void function1();\n", // the original
+               Style);
+
+  // test Never
+  Style.AlwaysBreakBeforeFunctionParameters = FormatStyle::FPBS_Never;
+  verifyFormat("int function1();\n" // the formatted part
+               "int function2(int param1, int param2, int param3);\n",
+               "int function1();\n" // the original
+               "int function2(\n"
+               "    int param1,\n"
+               "    int param2,\n"
+               "    int param3);\n",
                Style);
 }
 } // namespace

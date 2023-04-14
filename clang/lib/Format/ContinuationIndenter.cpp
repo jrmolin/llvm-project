@@ -355,10 +355,17 @@ bool ContinuationIndenter::mustBreak(const LineState &State) {
     return LambdaBodyLength > getColumnLimit(State);
   }
   // Check if we want to break before function parameters in declarations
-  if (startsNextParameter(Current, Style) &&
-      Style.AlwaysBreakBeforeFunctionParameters &&
-      State.Line->MustBeDeclaration) {
-    return true;
+  if (startsNextParameter(Current, Style) && State.Line->MustBeDeclaration) {
+    switch (Style.AlwaysBreakBeforeFunctionParameters) {
+    case FormatStyle::FPBS_Always:
+      return true;
+    case FormatStyle::FPBS_Never:
+      return false;
+    case FormatStyle::FPBS_Leave:
+      if (Current.NewlinesBefore > 0)
+        return true;
+      break;
+    }
   }
   if (Current.MustBreakBefore ||
       (Current.is(TT_InlineASMColon) &&
@@ -1062,7 +1069,7 @@ unsigned ContinuationIndenter::addTokenOnNewLine(LineState &State,
     // to start a member initializater list in a constructor, this should not
     // be considered bin packing unless the relevant AllowAll option is false or
     // this is a dict/object literal. Break if
-    // AlwaysBreakBeforeFunctionParameters is true and it's a function
+    // AlwaysBreakBeforeFunctionParameters is Always and it's a function
     // declaration.
     bool PreviousIsBreakingCtorInitializerColon =
         PreviousNonComment && PreviousNonComment->is(TT_CtorInitializerColon) &&
@@ -1079,7 +1086,11 @@ unsigned ContinuationIndenter::addTokenOnNewLine(LineState &State,
         (!AllowAllConstructorInitializersOnNextLine &&
          PreviousIsBreakingCtorInitializerColon) ||
         Previous.is(TT_DictLiteral) ||
-        (Style.AlwaysBreakBeforeFunctionParameters &&
+        (((Style.AlwaysBreakBeforeFunctionParameters ==
+           FormatStyle::FPBS_Always) ||
+          ((Style.AlwaysBreakBeforeFunctionParameters ==
+            FormatStyle::FPBS_Leave) &&
+           Current.NewlinesBefore > 0)) &&
          State.Line->MustBeDeclaration)) {
       CurrentState.BreakBeforeParameter = true;
     }

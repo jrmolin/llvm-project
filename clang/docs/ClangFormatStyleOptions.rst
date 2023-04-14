@@ -1370,20 +1370,55 @@ the configuration (without a prefix: ``Auto``).
 
 .. _AlwaysBreakBeforeFunctionParameters:
 
-**AlwaysBreakBeforeFunctionParameters** (``Boolean``) :versionbadge:`clang-format 16.0` :ref:`¶ <AlwaysBreakBeforeFunctionParameters>`
-  If ``true``, always break before function parameters in a declaration and
-  a definition.
+**AlwaysBreakBeforeFunctionParameters** (``FunctionParameterBreakingStyle``) :versionbadge:`clang-format 16.0` :ref:`¶ <AlwaysBreakBeforeFunctionParameters>`
+  The function parameter breaking style to use.
 
-  This flag is meant to align function parameters starting on the line
-  following a function declaration or definition. Thus, it will only take
-  effect if a function declares a parameter (or multiple parameters).
+  Possible values:
 
-  .. code-block:: c++
+  * ``FPBS_Leave`` (in configuration: ``Leave``)
+    Do nothing with line breaks before function parameters.
 
-     true:                           false:
-     int someFunction(       vs.     int someFunction(int arg1, int arg2);
-         int arg1,
-         int arg2);
+    .. code-block:: c++
+
+       original:
+       int someFunction(
+           int arg1,
+           int arg2);
+       int someFunction(int arg1, int arg2);
+
+       formatted:
+       int someFunction(
+           int arg1,
+           int arg2);
+       int someFunction(int arg1, int arg2);
+
+  * ``FPBS_Never`` (in configuration: ``Never``)
+    Never break after the return type. This removes breaks that are there.
+
+    .. code-block:: c++
+
+       original:
+       int someFunction(
+           int arg1,
+           int arg2);
+
+       formatted:
+       int someFunction(int arg1, int arg2);
+
+  * ``FPBS_Always`` (in configuration: ``Always``)
+    Always break after the return type.
+
+    .. code-block:: c++
+
+       original:
+       int someFunction(int arg1, int arg2);
+
+       formatted:
+       int someFunction(
+           int arg1,
+           int arg2);
+
+
 
 .. _AlwaysBreakBeforeMultilineStrings:
 
