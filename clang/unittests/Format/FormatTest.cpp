@@ -25490,6 +25490,14 @@ TEST_F(FormatTest, BreakBeforeParameterList) {
                "    int param3);\n",
                Style);
 }
+
+TEST_F(FormatTest, InterfaceAsClassMemberName) {
+  verifyFormat("class Foo {\n"
+               "  int interface;\n"
+               "  Foo::Foo(int iface) : interface{iface} {}\n"
+               "}");
+}
+
 } // namespace
 } // namespace test
 } // namespace format

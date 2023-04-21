@@ -3578,9 +3578,8 @@ SDValue X86TargetLowering::LowerCallResult(
     // In some calling conventions we need to remove the used registers
     // from the register mask.
     if (RegMask) {
-      for (MCSubRegIterator SubRegs(VA.getLocReg(), TRI, /*IncludeSelf=*/true);
-           SubRegs.isValid(); ++SubRegs)
-        RegMask[*SubRegs / 32] &= ~(1u << (*SubRegs % 32));
+      for (MCPhysReg SubReg : TRI->subregs_inclusive(VA.getLocReg()))
+        RegMask[SubReg / 32] &= ~(1u << (SubReg % 32));
     }
 
     // Report an error if there was an attempt to return FP values via XMM
@@ -4941,9 +4940,8 @@ X86TargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
     // in the RegMask.
     if (ShouldDisableArgRegs) {
       for (auto const &RegPair : RegsToPass)
-        for (MCSubRegIterator SubRegs(RegPair.first, TRI, /*IncludeSelf=*/true);
-             SubRegs.isValid(); ++SubRegs)
-          RegMask[*SubRegs / 32] &= ~(1u << (*SubRegs % 32));
+        for (MCPhysReg SubReg : TRI->subregs_inclusive(RegPair.first))
+          RegMask[SubReg / 32] &= ~(1u << (SubReg % 32));
     }
 
     // Create the RegMask Operand according to our updated mask.
@@ -47304,10 +47302,10 @@ static SDValue combinePTESTCC(SDValue EFLAGS, X86::CondCode &CC,
   // TESTZ: ZF = (Op0 & Op1) == 0
   // TESTC: CF = (~Op0 & Op1) == 0
   // TESTNZC: ZF == 0 && CF == 0
-  EVT VT = EFLAGS.getValueType();
+  MVT VT = EFLAGS.getSimpleValueType();
   SDValue Op0 = EFLAGS.getOperand(0);
   SDValue Op1 = EFLAGS.getOperand(1);
-  EVT OpVT = Op0.getValueType();
+  MVT OpVT = Op0.getSimpleValueType();
 
   // TEST*(~X,Y) == TEST*(X,Y)
   if (SDValue NotOp0 = IsNOT(Op0, DAG)) {
@@ -47351,9 +47349,10 @@ static SDValue combinePTESTCC(SDValue EFLAGS, X86::CondCode &CC,
     if (SDValue NotOp1 = IsNOT(Op1, DAG)) {
       if (peekThroughBitcasts(NotOp1) == peekThroughBitcasts(Op0)) {
         SDLoc DL(EFLAGS);
-        return DAG.getNode(EFLAGS.getOpcode(), DL, VT,
-                           DAG.getBitcast(OpVT, NotOp1),
-                           DAG.getAllOnesConstant(DL, OpVT));
+        return DAG.getNode(
+            EFLAGS.getOpcode(), DL, VT, DAG.getBitcast(OpVT, NotOp1),
+            DAG.getBitcast(OpVT,
+                           DAG.getAllOnesConstant(DL, NotOp1.getValueType())));
       }
     }
   }
@@ -47441,10 +47440,12 @@ static SDValue combinePTESTCC(SDValue EFLAGS, X86::CondCode &CC,
                                  peekThroughBitcasts(Src0.getOperand(1)), true);
         Src1 = getSplitVectorSrc(peekThroughBitcasts(Src1.getOperand(0)),
                                  peekThroughBitcasts(Src1.getOperand(1)), true);
-        if (Src0 && Src1)
+        if (Src0 && Src1) {
+          MVT OpVT2 = OpVT.getDoubleNumVectorElementsVT();
           return DAG.getNode(EFLAGS.getOpcode(), SDLoc(EFLAGS), VT,
-                             DAG.getBitcast(MVT::v4i64, Src0),
-                             DAG.getBitcast(MVT::v4i64, Src1));
+                             DAG.getBitcast(OpVT2, Src0),
+                             DAG.getBitcast(OpVT2, Src1));
+        }
       }
     }
   }
@@ -49143,7 +49144,7 @@ static SDValue combineVectorShiftImm(SDNode *N, SelectionDAG &DAG,
     // Don't break NOT patterns.
     SDValue BC = peekThroughOneUseBitcasts(N0);
     if (ISD::isBitwiseLogicOp(BC.getOpcode()) &&
-        BC->isOnlyUserOf(BC.getOperand(1).getNode()) && 
+        BC->isOnlyUserOf(BC.getOperand(1).getNode()) &&
         !ISD::isBuildVectorAllOnes(BC.getOperand(1).getNode())) {
       if (SDValue RHS = TryConstantFold(BC.getOperand(1))) {
         SDLoc DL(N);
@@ -56425,9 +56426,8 @@ static SDValue combineConcatVectorOps(const SDLoc &DL, MVT VT,
                            ConcatSubOperand(SrcVT, Ops, 1));
       }
       break;
-    case ISD::FADD:
-    case ISD::FSUB:
-    case ISD::FMUL:
+    // Due to VADD, VSUB, VMUL can executed on more ports than VINSERT and
+    // their latency are short, so here we don't replace them.
     case ISD::FDIV:
       if (!IsSplat && (VT.is256BitVector() ||
                        (VT.is512BitVector() && Subtarget.useAVX512Regs()))) {
