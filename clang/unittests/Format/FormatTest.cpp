@@ -25442,7 +25442,8 @@ TEST_F(FormatTest, BreakBeforeParameterList) {
                "void function3(int param1, int param2, int param3) {}\n"
                "int function4(int param1, int param2, int param3);\n",
                "int function1();\n" // original
-               "int function2(int param1, int param2, int param3);\n"
+               "int function2(\n"
+               "    int param1, int param2, int param3);\n"
                "void function3(int param1, int param2, int param3) {}\n"
                "int function4(int param1, int param2, int param3);\n",
                Style);

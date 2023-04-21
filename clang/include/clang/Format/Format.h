@@ -848,7 +848,7 @@ struct FormatStyle {
   };
 
   /// The function parameter breaking style to use.
-  /// \version 16.0
+  /// \version 17.0
   FunctionParameterBreakingStyle BreakBeforeFunctionParameters;
 
   /// If ``true``, always break before multiline string literals.

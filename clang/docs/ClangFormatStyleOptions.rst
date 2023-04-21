@@ -2433,13 +2433,14 @@ the configuration (without a prefix: ``Auto``).
 
 .. _BreakBeforeFunctionParameters:
 
-**BreakBeforeFunctionParameters** (``FunctionParameterBreakingStyle``) :versionbadge:`clang-format 16.0` :ref:`¶ <BreakBeforeFunctionParameters>`
+**BreakBeforeFunctionParameters** (``FunctionParameterBreakingStyle``) :versionbadge:`clang-format 17.0` :ref:`¶ <BreakBeforeFunctionParameters>`
   The function parameter breaking style to use.
 
   Possible values:
 
   * ``FPBS_Leave`` (in configuration: ``Leave``)
-    Be transparent with line breaks before function parameters. This allows the
+    Be transparent with line breaks before function parameters. This allows
+    the
     penalty calculations to drive line breaks.
 
     .. code-block:: c++
@@ -2451,7 +2452,8 @@ the configuration (without a prefix: ``Auto``).
        int someFunction(int arg1, int arg2);
 
   * ``FPBS_Never`` (in configuration: ``Never``)
-    Never break before the first parameter. This removes breaks that are there.
+    Never break before the first parameter. This removes breaks that are
+    there.
 
     .. code-block:: c++
 
