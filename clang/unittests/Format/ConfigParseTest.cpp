@@ -607,15 +607,14 @@ TEST(ConfigParseTest, ParsesConfiguration) {
   CHECK_PARSE("BreakBeforeBraces: Custom", BreakBeforeBraces,
               FormatStyle::BS_Custom);
 
-  Style.BreakBeforeFunctionParameters = FormatStyle::FPBS_Never;
-  CHECK_PARSE("BreakBeforeFunctionParameters: Leave",
-              BreakBeforeFunctionParameters, FormatStyle::FPBS_Leave);
-  CHECK_PARSE("BreakBeforeFunctionParameters: false",
-              BreakBeforeFunctionParameters, FormatStyle::FPBS_Leave);
   CHECK_PARSE("BreakBeforeFunctionParameters: Always",
               BreakBeforeFunctionParameters, FormatStyle::FPBS_Always);
+  CHECK_PARSE("BreakBeforeFunctionParameters: Leave",
+              BreakBeforeFunctionParameters, FormatStyle::FPBS_Leave);
   CHECK_PARSE("BreakBeforeFunctionParameters: true",
               BreakBeforeFunctionParameters, FormatStyle::FPBS_Always);
+  CHECK_PARSE("BreakBeforeFunctionParameters: false",
+              BreakBeforeFunctionParameters, FormatStyle::FPBS_Leave);
   CHECK_PARSE("BreakBeforeFunctionParameters: Never",
               BreakBeforeFunctionParameters, FormatStyle::FPBS_Never);
 
