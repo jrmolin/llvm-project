@@ -5700,6 +5700,8 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
                     options::OPT_fno_unique_internal_linkage_names);
   Args.addOptInFlag(CmdArgs, options::OPT_funique_basic_block_section_names,
                     options::OPT_fno_unique_basic_block_section_names);
+  Args.addOptInFlag(CmdArgs, options::OPT_fconvergent_functions,
+                    options::OPT_fno_convergent_functions);
 
   if (Arg *A = Args.getLastArg(options::OPT_fsplit_machine_functions,
                                options::OPT_fno_split_machine_functions)) {
@@ -6125,9 +6127,11 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   Args.AddLastArg(CmdArgs, options::OPT_femit_all_decls);
   Args.AddLastArg(CmdArgs, options::OPT_fheinous_gnu_extensions);
   Args.AddLastArg(CmdArgs, options::OPT_fdigraphs, options::OPT_fno_digraphs);
-  Args.AddLastArg(CmdArgs, options::OPT_femulated_tls,
-                  options::OPT_fno_emulated_tls);
   Args.AddLastArg(CmdArgs, options::OPT_fzero_call_used_regs_EQ);
+
+  if (Args.hasFlag(options::OPT_femulated_tls, options::OPT_fno_emulated_tls,
+                   Triple.hasDefaultEmulatedTLS()))
+    CmdArgs.push_back("-femulated-tls");
 
   if (Arg *A = Args.getLastArg(options::OPT_fzero_call_used_regs_EQ)) {
     // FIXME: There's no reason for this to be restricted to X86. The backend
@@ -7903,6 +7907,12 @@ void ClangAs::AddRISCVTargetArgs(const ArgList &Args,
 
   CmdArgs.push_back("-target-abi");
   CmdArgs.push_back(ABIName.data());
+
+  if (Args.hasFlag(options::OPT_mdefault_build_attributes,
+                   options::OPT_mno_default_build_attributes, true)) {
+      CmdArgs.push_back("-mllvm");
+      CmdArgs.push_back("-riscv-add-build-attributes");
+  }
 }
 
 void ClangAs::ConstructJob(Compilation &C, const JobAction &JA,
