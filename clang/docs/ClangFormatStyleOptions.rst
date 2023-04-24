@@ -2445,10 +2445,6 @@ the configuration (without a prefix: ``Auto``).
 
     .. code-block:: c++
 
-       original:
-       int someFunction(int arg1, int arg2);
-
-       formatted:
        int someFunction(int arg1, int arg2);
 
   * ``FPBS_Never`` (in configuration: ``Never``)
@@ -2457,12 +2453,6 @@ the configuration (without a prefix: ``Auto``).
 
     .. code-block:: c++
 
-       original:
-       int someFunction(
-           int arg1,
-           int arg2);
-
-       formatted:
        int someFunction(int arg1, int arg2);
 
   * ``FPBS_Always`` (in configuration: ``Always``)
@@ -2470,10 +2460,6 @@ the configuration (without a prefix: ``Auto``).
 
     .. code-block:: c++
 
-       original:
-       int someFunction(int arg1, int arg2);
-
-       formatted:
        int someFunction(
            int arg1,
            int arg2);

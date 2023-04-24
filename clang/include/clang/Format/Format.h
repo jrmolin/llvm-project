@@ -813,10 +813,6 @@ struct FormatStyle {
     /// the
     /// penalty calculations to drive line breaks.
     /// \code
-    ///    original:
-    ///    int someFunction(int arg1, int arg2);
-    ///
-    ///    formatted:
     ///    int someFunction(int arg1, int arg2);
     /// \endcode
     FPBS_Leave,
@@ -824,22 +820,12 @@ struct FormatStyle {
     /// Never break before the first parameter. This removes breaks that are
     /// there.
     /// \code
-    ///    original:
-    ///    int someFunction(
-    ///        int arg1,
-    ///        int arg2);
-    ///
-    ///    formatted:
     ///    int someFunction(int arg1, int arg2);
     /// \endcode
     FPBS_Never,
 
     /// Always break before the first parameter.
     /// \code
-    ///    original:
-    ///    int someFunction(int arg1, int arg2);
-    ///
-    ///    formatted:
     ///    int someFunction(
     ///        int arg1,
     ///        int arg2);
