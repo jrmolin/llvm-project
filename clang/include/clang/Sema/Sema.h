@@ -946,10 +946,10 @@ public:
   class DelayedDiagnostics {
     /// The current pool of diagnostics into which delayed
     /// diagnostics should go.
-    sema::DelayedDiagnosticPool *CurPool;
+    sema::DelayedDiagnosticPool *CurPool = nullptr;
 
   public:
-    DelayedDiagnostics() : CurPool(nullptr) {}
+    DelayedDiagnostics() = default;
 
     /// Adds a delayed diagnostic.
     void add(const sema::DelayedDiagnostic &diag); // in DelayedDiagnostic.h
@@ -1620,6 +1620,9 @@ public:
 
   /// Indicate RISC-V vector builtin functions enabled or not.
   bool DeclareRISCVVBuiltins = false;
+
+  /// Indicate RISC-V Sifive vector builtin functions enabled or not.
+  bool DeclareRISCVVectorBuiltins = false;
 
 private:
   std::unique_ptr<sema::RISCVIntrinsicManager> RVIntrinsicManager;
@@ -2588,13 +2591,11 @@ public:
   //
 
   struct SkipBodyInfo {
-    SkipBodyInfo()
-        : ShouldSkip(false), CheckSameAsPrevious(false), Previous(nullptr),
-          New(nullptr) {}
-    bool ShouldSkip;
-    bool CheckSameAsPrevious;
-    NamedDecl *Previous;
-    NamedDecl *New;
+    SkipBodyInfo() = default;
+    bool ShouldSkip = false;
+    bool CheckSameAsPrevious = false;
+    NamedDecl *Previous = nullptr;
+    NamedDecl *New = nullptr;
   };
 
   DeclGroupPtrTy ConvertDeclToDeclGroup(Decl *Ptr, Decl *OwnedType = nullptr);
@@ -12685,6 +12686,7 @@ public:
                                        SourceLocation Loc, bool IsCompAssign);
 
   bool isValidSveBitcast(QualType srcType, QualType destType);
+  bool isValidRVVBitcast(QualType srcType, QualType destType);
 
   bool areMatrixTypesOfTheSameDimension(QualType srcTy, QualType destTy);
 

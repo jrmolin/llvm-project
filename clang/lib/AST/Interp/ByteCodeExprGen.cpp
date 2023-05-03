@@ -40,7 +40,7 @@ private:
 };
 
 /// Scope used to handle initialization methods.
-template <class Emitter> class OptionScope {
+template <class Emitter> class OptionScope final {
 public:
   /// Root constructor, compiling or discarding primitives.
   OptionScope(ByteCodeExprGen<Emitter> *Ctx, bool NewDiscardResult)
@@ -148,6 +148,17 @@ bool ByteCodeExprGen<Emitter>::VisitCastExpr(const CastExpr *CE) {
 
     // TODO: Emit this only if FromT != ToT.
     return this->emitCast(*FromT, *ToT, CE);
+  }
+
+  case CK_PointerToBoolean: {
+    // Just emit p != nullptr for this.
+    if (!this->visit(SubExpr))
+      return false;
+
+    if (!this->emitNullPtr(CE))
+      return false;
+
+    return this->emitNEPtr(CE);
   }
 
   case CK_ToVoid:
@@ -1280,7 +1291,7 @@ bool ByteCodeExprGen<Emitter>::visitArrayInitializer(const Expr *Initializer) {
       //   since we memset our Block*s to 0 and so we have the desired value
       //   without this.
       for (size_t I = 0; I != NumElems; ++I) {
-        if (!this->emitZero(*ElemT, Initializer))
+        if (!this->visitZeroInitializer(CAT->getElementType(), Initializer))
           return false;
         if (!this->emitInitElem(*ElemT, I, Initializer))
           return false;

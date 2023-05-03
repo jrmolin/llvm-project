@@ -1152,7 +1152,7 @@ void vector::ExtractOp::build(OpBuilder &builder, OperationState &result,
 LogicalResult
 ExtractOp::inferReturnTypes(MLIRContext *, std::optional<Location>,
                             ValueRange operands, DictionaryAttr attributes,
-                            RegionRange,
+                            OpaqueProperties properties, RegionRange,
                             SmallVectorImpl<Type> &inferredReturnTypes) {
   ExtractOp::Adaptor op(operands, attributes);
   auto vectorType = op.getVector().getType().cast<VectorType>();
@@ -2084,7 +2084,7 @@ LogicalResult ShuffleOp::verify() {
 LogicalResult
 ShuffleOp::inferReturnTypes(MLIRContext *, std::optional<Location>,
                             ValueRange operands, DictionaryAttr attributes,
-                            RegionRange,
+                            OpaqueProperties properties, RegionRange,
                             SmallVectorImpl<Type> &inferredReturnTypes) {
   ShuffleOp::Adaptor op(operands, attributes);
   auto v1Type = op.getV1().getType().cast<VectorType>();
@@ -4628,6 +4628,10 @@ Type GatherOp::getExpectedMaskType() {
   auto vecType = this->getIndexVectorType();
   return VectorType::get(vecType.getShape(),
                          IntegerType::get(vecType.getContext(), /*width=*/1));
+}
+
+std::optional<SmallVector<int64_t, 4>> GatherOp::getShapeForUnroll() {
+  return llvm::to_vector<4>(getVectorType().getShape());
 }
 
 namespace {

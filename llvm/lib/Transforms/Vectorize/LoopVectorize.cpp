@@ -987,35 +987,7 @@ const SCEV *createTripCountSCEV(Type *IdxTy, PredicatedScalarEvolution &PSE,
   assert(!isa<SCEVCouldNotCompute>(BackedgeTakenCount) && "Invalid loop count");
 
   ScalarEvolution &SE = *PSE.getSE();
-
-  unsigned BackEdgeSize = SE.getTypeSizeInBits(BackedgeTakenCount->getType());
-  unsigned IdxSize = IdxTy->getPrimitiveSizeInBits();
-
-  // If we need to need to zero extend the backedge count, check if we can
-  // add one to it prior to zero extending without overflow. Provided this is
-  // safe, it allows better simplification of the +1.
-  if (OrigLoop && BackEdgeSize < IdxSize &&
-      SE.isLoopEntryGuardedByCond(
-          OrigLoop, ICmpInst::ICMP_NE, BackedgeTakenCount,
-          SE.getMinusOne(BackedgeTakenCount->getType()))) {
-    return SE.getZeroExtendExpr(
-        SE.getAddExpr(BackedgeTakenCount,
-                      SE.getOne(BackedgeTakenCount->getType())),
-        IdxTy);
-  }
-
-  // The exit count might have the type of i64 while the phi is i32. This can
-  // happen if we have an induction variable that is sign extended before the
-  // compare. The only way that we get a backedge taken count is that the
-  // induction variable was signed and as such will not overflow. In such a case
-  // truncation is legal.
-  if (BackEdgeSize > IdxSize)
-    BackedgeTakenCount = SE.getTruncateOrNoop(BackedgeTakenCount, IdxTy);
-  BackedgeTakenCount = SE.getNoopOrZeroExtend(BackedgeTakenCount, IdxTy);
-
-  // Get the total trip count from the count by adding 1.
-  return SE.getAddExpr(BackedgeTakenCount,
-                       SE.getOne(BackedgeTakenCount->getType()));
+  return SE.getTripCountFromExitCount(BackedgeTakenCount, IdxTy, OrigLoop);
 }
 
 static Value *getRuntimeVFAsFloat(IRBuilderBase &B, Type *FTy,
@@ -1221,12 +1193,13 @@ public:
   bool runtimeChecksRequired();
 
   /// \return The most profitable vectorization factor and the cost of that VF.
-  /// This method checks every VF in \p CandidateVFs. If UserVF is not ZERO
-  /// then this vectorization factor will be selected if vectorization is
-  /// possible.
+  /// This method checks every VF in \p CandidateVFs.
   VectorizationFactor
   selectVectorizationFactor(const ElementCountSet &CandidateVFs);
 
+  /// \return The most profitable vectorization factor and the cost of that VF
+  /// for vectorizing the epilogue. Returns VectorizationFactor::Disabled if
+  /// epilogue vectorization is not supported for the loop.
   VectorizationFactor
   selectEpilogueVectorizationFactor(const ElementCount MaxVF,
                                     const LoopVectorizationPlanner &LVP);
@@ -1869,10 +1842,9 @@ private:
         Ops, [this, VF](Value *V) { return this->needsExtract(V, VF); }));
   }
 
-  /// Determines if we have the infrastructure to vectorize loop \p L and its
+  /// Determines if we have the infrastructure to vectorize the loop and its
   /// epilogue, assuming the main loop is vectorized by \p VF.
-  bool isCandidateForEpilogueVectorization(const Loop &L,
-                                           const ElementCount VF) const;
+  bool isCandidateForEpilogueVectorization(const ElementCount VF) const;
 
   /// Returns true if epilogue vectorization is considered profitable, and
   /// false otherwise.
@@ -5394,17 +5366,25 @@ bool LoopVectorizationCostModel::isMoreProfitable(
 
   unsigned MaxTripCount = PSE.getSE()->getSmallConstantMaxTripCount(TheLoop);
 
-  if (!A.Width.isScalable() && !B.Width.isScalable() && foldTailByMasking() &&
-      MaxTripCount) {
-    // If we are folding the tail and the trip count is a known (possibly small)
-    // constant, the trip count will be rounded up to an integer number of
-    // iterations. The total cost will be PerIterationCost*ceil(TripCount/VF),
-    // which we compare directly. When not folding the tail, the total cost will
-    // be PerIterationCost*floor(TC/VF) + Scalar remainder cost, and so is
-    // approximated with the per-lane cost below instead of using the tripcount
-    // as here.
-    auto RTCostA = CostA * divideCeil(MaxTripCount, A.Width.getFixedValue());
-    auto RTCostB = CostB * divideCeil(MaxTripCount, B.Width.getFixedValue());
+  if (!A.Width.isScalable() && !B.Width.isScalable() && MaxTripCount) {
+    // If the trip count is a known (possibly small) constant, the trip count
+    // will be rounded up to an integer number of iterations under
+    // FoldTailByMasking. The total cost in that case will be
+    // VecCost*ceil(TripCount/VF). When not folding the tail, the total
+    // cost will be VecCost*floor(TC/VF) + ScalarCost*(TC%VF). There will be
+    // some extra overheads, but for the purpose of comparing the costs of
+    // different VFs we can use this to compare the total loop-body cost
+    // expected after vectorization.
+    auto GetCostForTC = [MaxTripCount, this](unsigned VF,
+                                             InstructionCost VectorCost,
+                                             InstructionCost ScalarCost) {
+      return foldTailByMasking() ? VectorCost * divideCeil(MaxTripCount, VF)
+                                 : VectorCost * (MaxTripCount / VF) +
+                                       ScalarCost * (MaxTripCount % VF);
+    };
+    auto RTCostA = GetCostForTC(A.Width.getFixedValue(), CostA, A.ScalarCost);
+    auto RTCostB = GetCostForTC(B.Width.getFixedValue(), CostB, B.ScalarCost);
+
     return RTCostA < RTCostB;
   }
 
@@ -5572,10 +5552,10 @@ VectorizationFactor LoopVectorizationCostModel::selectVectorizationFactor(
 }
 
 bool LoopVectorizationCostModel::isCandidateForEpilogueVectorization(
-    const Loop &L, ElementCount VF) const {
+    ElementCount VF) const {
   // Cross iteration phis such as reductions need special handling and are
   // currently unsupported.
-  if (any_of(L.getHeader()->phis(),
+  if (any_of(TheLoop->getHeader()->phis(),
              [&](PHINode &Phi) { return Legal->isFixedOrderRecurrence(&Phi); }))
     return false;
 
@@ -5583,20 +5563,21 @@ bool LoopVectorizationCostModel::isCandidateForEpilogueVectorization(
   // currently unsupported.
   for (const auto &Entry : Legal->getInductionVars()) {
     // Look for uses of the value of the induction at the last iteration.
-    Value *PostInc = Entry.first->getIncomingValueForBlock(L.getLoopLatch());
+    Value *PostInc =
+        Entry.first->getIncomingValueForBlock(TheLoop->getLoopLatch());
     for (User *U : PostInc->users())
-      if (!L.contains(cast<Instruction>(U)))
+      if (!TheLoop->contains(cast<Instruction>(U)))
         return false;
     // Look for uses of penultimate value of the induction.
     for (User *U : Entry.first->users())
-      if (!L.contains(cast<Instruction>(U)))
+      if (!TheLoop->contains(cast<Instruction>(U)))
         return false;
   }
 
   // Epilogue vectorization code has not been auditted to ensure it handles
   // non-latch exits properly.  It may be fine, but it needs auditted and
   // tested.
-  if (L.getExitingBlock() != L.getLoopLatch())
+  if (TheLoop->getExitingBlock() != TheLoop->getLoopLatch())
     return false;
 
   return true;
@@ -5643,7 +5624,7 @@ LoopVectorizationCostModel::selectEpilogueVectorizationFactor(
 
   // Not really a cost consideration, but check for unsupported cases here to
   // simplify the logic.
-  if (!isCandidateForEpilogueVectorization(*TheLoop, MainLoopVF)) {
+  if (!isCandidateForEpilogueVectorization(MainLoopVF)) {
     LLVM_DEBUG(dbgs() << "LEV: Unable to vectorize epilogue because the loop "
                          "is not a supported candidate.\n");
     return Result;
@@ -7576,6 +7557,9 @@ LoopVectorizationPlanner::planInVPlanNativePath(ElementCount UserVF) {
 std::optional<VectorizationFactor>
 LoopVectorizationPlanner::plan(ElementCount UserVF, unsigned UserIC) {
   assert(OrigLoop->isInnermost() && "Inner loop expected.");
+  CM.collectValuesToIgnore();
+  CM.collectElementTypesForWidening();
+
   FixedScalableVFPair MaxFactors = CM.computeMaxVF(UserVF, UserIC);
   if (!MaxFactors) // Cases that should not to be vectorized nor interleaved.
     return std::nullopt;
@@ -8770,7 +8754,8 @@ static void addCanonicalIVRecipes(VPlan &Plan, Type *IdxTy, DebugLoc DL,
   VPBasicBlock *EB = TopRegion->getExitingBasicBlock();
   if (useActiveLaneMaskForControlFlow(Style)) {
     // Create the active lane mask instruction in the vplan preheader.
-    VPBasicBlock *Preheader = Plan.getEntry()->getEntryBasicBlock();
+    VPBasicBlock *VecPreheader =
+        cast<VPBasicBlock>(Plan.getVectorLoopRegion()->getSinglePredecessor());
 
     // We can't use StartV directly in the ActiveLaneMask VPInstruction, since
     // we have to take unrolling into account. Each part needs to start at
@@ -8779,7 +8764,7 @@ static void addCanonicalIVRecipes(VPlan &Plan, Type *IdxTy, DebugLoc DL,
         new VPInstruction(HasNUW ? VPInstruction::CanonicalIVIncrementForPartNUW
                                  : VPInstruction::CanonicalIVIncrementForPart,
                           {StartV}, DL, "index.part.next");
-    Preheader->appendRecipe(CanonicalIVIncrementParts);
+    VecPreheader->appendRecipe(CanonicalIVIncrementParts);
 
     // Create the ActiveLaneMask instruction using the correct start values.
     VPValue *TC = Plan.getOrCreateTripCount();
@@ -8791,7 +8776,7 @@ static void addCanonicalIVRecipes(VPlan &Plan, Type *IdxTy, DebugLoc DL,
       // done after the active.lane.mask intrinsic is called.
       auto *TCMinusVF =
           new VPInstruction(VPInstruction::CalculateTripCountMinusVF, {TC}, DL);
-      Preheader->appendRecipe(TCMinusVF);
+      VecPreheader->appendRecipe(TCMinusVF);
       IncrementValue = CanonicalIVPHI;
       TripCount = TCMinusVF;
     } else {
@@ -8806,7 +8791,7 @@ static void addCanonicalIVRecipes(VPlan &Plan, Type *IdxTy, DebugLoc DL,
     auto *EntryALM = new VPInstruction(VPInstruction::ActiveLaneMask,
                                        {CanonicalIVIncrementParts, TC}, DL,
                                        "active.lane.mask.entry");
-    Preheader->appendRecipe(EntryALM);
+    VecPreheader->appendRecipe(EntryALM);
 
     // Now create the ActiveLaneMaskPhi recipe in the main loop using the
     // preheader ActiveLaneMask instruction.
@@ -9131,11 +9116,10 @@ VPlanPtr LoopVectorizationPlanner::buildVPlan(VFRange &Range) {
   for (ElementCount VF : Range)
     Plan->addVF(VF);
 
-  SmallPtrSet<Instruction *, 1> DeadInstructions;
   VPlanTransforms::VPInstructionsToVPRecipes(
       Plan,
       [this](PHINode *P) { return Legal->getIntOrFpInductionDescriptor(P); },
-      DeadInstructions, *PSE.getSE(), *TLI);
+      *PSE.getSE(), *TLI);
 
   // Remove the existing terminator of the exiting block of the top-most region.
   // A BranchOnCount will be added instead when adding the canonical IV recipes.
@@ -10253,9 +10237,6 @@ bool LoopVectorizePass::processLoop(Loop *L) {
   // Use the cost model.
   LoopVectorizationCostModel CM(SEL, L, PSE, LI, &LVL, *TTI, TLI, DB, AC, ORE,
                                 F, &Hints, IAI);
-  CM.collectValuesToIgnore();
-  CM.collectElementTypesForWidening();
-
   // Use the planner for vectorization.
   LoopVectorizationPlanner LVP(L, LI, TLI, TTI, &LVL, CM, IAI, PSE, Hints, ORE);
 
@@ -10578,7 +10559,7 @@ LoopVectorizeResult LoopVectorizePass::runImpl(
 
     // For the inner loops we actually process, form LCSSA to simplify the
     // transform.
-    Changed |= formLCSSARecursively(*L, *DT, LI, SE);
+    Changed |= formLCSSARecursively(*L, *DT, LI);
 
     Changed |= CFGChanged |= processLoop(L);
 
@@ -10630,6 +10611,11 @@ PreservedAnalyses LoopVectorizePass::run(Function &F,
     if (!EnableVPlanNativePath) {
       PA.preserve<LoopAnalysis>();
       PA.preserve<DominatorTreeAnalysis>();
+      PA.preserve<ScalarEvolutionAnalysis>();
+
+#ifdef EXPENSIVE_CHECKS
+      SE.verify();
+#endif
     }
 
     if (Result.MadeCFGChange) {

@@ -23,7 +23,6 @@
 #include "flang/Parser/parse-tree.h"
 #include "flang/Semantics/tools.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
-#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "llvm/Frontend/OpenMP/OMPConstants.h"
 
 using namespace mlir;
@@ -222,20 +221,20 @@ void DataSharingProcessor::insertLastPrivateCompare(mlir::Operation *op) {
           //  omp.section {
           //      fir.allocate for `private`/`firstprivate`
           //      <More operations here>
-          //      scf.if %true {
+          //      fir.if %true {
           //          ^%lpv_update_blk
           //      }
           //  }
           // }
           //
           // To keep code consistency while handling privatization
-          // through this control flow, add a `scf.if` operation
+          // through this control flow, add a `fir.if` operation
           // that always evaluates to true, in order to create
           // a dedicated sub-region in `omp.section` where
           // lastprivate FIR can reside. Later canonicalizations
           // will optimize away this operation.
 
-          mlir::scf::IfOp ifOp = firOpBuilder.create<mlir::scf::IfOp>(
+          auto ifOp = firOpBuilder.create<fir::IfOp>(
               op->getLoc(),
               firOpBuilder.createIntegerConstant(
                   op->getLoc(), firOpBuilder.getIntegerType(1), 0x1),
@@ -280,7 +279,7 @@ void DataSharingProcessor::insertLastPrivateCompare(mlir::Operation *op) {
         // omp.wsloop {            ...
         //    ...                  store
         //    store       ===>     %cmp = llvm.icmp "eq" %iv %ub
-        //    omp.yield            scf.if %cmp {
+        //    omp.yield            fir.if %cmp {
         // }                         ^%lpv_update_blk:
         //                         }
         //                         omp.yield
@@ -295,8 +294,8 @@ void DataSharingProcessor::insertLastPrivateCompare(mlir::Operation *op) {
               op->getRegion(0).front().getArguments()[0],
               mlir::dyn_cast<mlir::omp::WsLoopOp>(op).getUpperBound()[0]);
         }
-        mlir::scf::IfOp ifOp = firOpBuilder.create<mlir::scf::IfOp>(
-            op->getLoc(), cmpOp, /*else*/ false);
+        auto ifOp =
+            firOpBuilder.create<fir::IfOp>(op->getLoc(), cmpOp, /*else*/ false);
         firOpBuilder.setInsertionPointToStart(&ifOp.getThenRegion().front());
         lastPrivIP = firOpBuilder.saveInsertionPoint();
       } else {
@@ -1181,6 +1180,18 @@ static Value getReductionInitValue(mlir::Location loc, mlir::Type type,
     unsigned bits = type.getIntOrFloatBitWidth();
     int64_t maxInt = llvm::APInt::getSignedMaxValue(bits).getSExtValue();
     return builder.createIntegerConstant(loc, type, maxInt);
+  } else if (reductionOpName.contains("ior")) {
+    unsigned bits = type.getIntOrFloatBitWidth();
+    int64_t zeroInt = llvm::APInt::getZero(bits).getSExtValue();
+    return builder.createIntegerConstant(loc, type, zeroInt);
+  } else if (reductionOpName.contains("ieor")) {
+    unsigned bits = type.getIntOrFloatBitWidth();
+    int64_t zeroInt = llvm::APInt::getZero(bits).getSExtValue();
+    return builder.createIntegerConstant(loc, type, zeroInt);
+  } else if (reductionOpName.contains("iand")) {
+    unsigned bits = type.getIntOrFloatBitWidth();
+    int64_t allOnInt = llvm::APInt::getAllOnes(bits).getSExtValue();
+    return builder.createIntegerConstant(loc, type, allOnInt);
   } else {
     if (type.isa<FloatType>())
       return builder.create<mlir::arith::ConstantOp>(
@@ -1268,6 +1279,15 @@ createReductionDecl(fir::FirOpBuilder &builder, llvm::StringRef reductionOpName,
       reductionOp =
           getReductionOperation<mlir::arith::MinFOp, mlir::arith::MinSIOp>(
               builder, type, loc, op1, op2);
+    } else if (name->source == "ior") {
+      assert((type.isIntOrIndex()) && "only integer is expected");
+      reductionOp = builder.create<mlir::arith::OrIOp>(loc, op1, op2);
+    } else if (name->source == "ieor") {
+      assert((type.isIntOrIndex()) && "only integer is expected");
+      reductionOp = builder.create<mlir::arith::XOrIOp>(loc, op1, op2);
+    } else if (name->source == "iand") {
+      assert((type.isIntOrIndex()) && "only integer is expected");
+      reductionOp = builder.create<mlir::arith::AndIOp>(loc, op1, op2);
     } else {
       TODO(loc, "Reduction of some intrinsic operators is not supported");
     }
@@ -1594,7 +1614,9 @@ static void genOMP(Fortran::lower::AbstractConverter &converter,
                          &redOperator.u)) {
         if (const auto *name{Fortran::parser::Unwrap<Fortran::parser::Name>(
                 reductionIntrinsic)}) {
-          if ((name->source != "max") && (name->source != "min")) {
+          if ((name->source != "max") && (name->source != "min") &&
+              (name->source != "ior") && (name->source != "ieor") &&
+              (name->source != "iand")) {
             TODO(currentLocation,
                  "Reduction of intrinsic procedures is not supported");
           }
@@ -2364,7 +2386,10 @@ void Fortran::lower::genOpenMPReduction(
                          &redOperator.u)) {
         if (const auto *name{Fortran::parser::Unwrap<Fortran::parser::Name>(
                 reductionIntrinsic)}) {
-          if ((name->source != "max") && (name->source != "min")) {
+          std::string redName = name->ToString();
+          if ((name->source != "max") && (name->source != "min") &&
+              (name->source != "ior") && (name->source != "ieor") &&
+              (name->source != "iand")) {
             continue;
           }
           for (const auto &ompObject : objectList.v) {
@@ -2383,12 +2408,21 @@ void Fortran::lower::genOpenMPReduction(
                         findReductionChain(loadVal, &reductionVal);
                     if (reductionOp == nullptr)
                       continue;
-                    assert(mlir::isa<mlir::arith::SelectOp>(reductionOp) &&
-                           "Selection Op not found in reduction intrinsic");
-                    mlir::Operation *compareOp =
-                        getCompareFromReductionOp(reductionOp, loadVal);
-                    updateReduction(compareOp, firOpBuilder, loadVal,
-                                    reductionVal);
+
+                    if (redName == "max" || redName == "min") {
+                      assert(mlir::isa<mlir::arith::SelectOp>(reductionOp) &&
+                             "Selection Op not found in reduction intrinsic");
+                      mlir::Operation *compareOp =
+                          getCompareFromReductionOp(reductionOp, loadVal);
+                      updateReduction(compareOp, firOpBuilder, loadVal,
+                                      reductionVal);
+                    }
+                    if (redName == "ior" || redName == "ieor" ||
+                        redName == "iand") {
+
+                      updateReduction(reductionOp, firOpBuilder, loadVal,
+                                      reductionVal);
+                    }
                   }
                 }
               }
