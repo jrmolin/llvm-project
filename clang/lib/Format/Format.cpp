@@ -341,10 +341,6 @@ struct ScalarEnumerationTraits<FormatStyle::FunctionParameterBreakingStyle> {
     IO.enumCase(Value, "Leave", FormatStyle::FPBS_Leave);
     IO.enumCase(Value, "Never", FormatStyle::FPBS_Never);
     IO.enumCase(Value, "Always", FormatStyle::FPBS_Always);
-
-    // For backward compatibility.
-    IO.enumCase(Value, "false", FormatStyle::FPBS_Leave);
-    IO.enumCase(Value, "true", FormatStyle::FPBS_Always);
   }
 };
 
